@@ -3016,8 +3016,7 @@ async def delete_client_branch(bid: str, user: dict = Depends(require_role("clie
     except Exception:
         pass
     return {"ok": True, "deleted_branch_id": bid}
-
-@api.put("/client/playlists/{pid}")
+"""@api.put("/client/playlists/{pid}")
 async def update_playlist(pid: str, body: PlaylistUpdate, user: dict = Depends(require_role("client"))):
     upd: Dict[str, Any] = {}
     if body.name is not None: upd["name"] = body.name
@@ -3072,6 +3071,76 @@ async def update_playlist(pid: str, body: PlaylistUpdate, user: dict = Depends(r
             zone_items = _remap_legacy_buckets_to_zone_ids(template_zone_ids, legacy_buckets)
             upd["zone_items"] = {zone: [item.model_dump() for item in items] for zone, items in zone_items.items()}
             await _validate_media([item.media_id for items in legacy_zone_items.values() for item in items], user["id"])
+    if not upd: raise HTTPException(status_code=400, detail="Nothing to update")
+    r = await db.playlists.find_one_and_update({"id": pid, "client_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0})
+    if not r: raise HTTPException(status_code=404, detail="Playlist not found")
+    asyncio.create_task(_broadcast_queue_refresh(user["id"], reason="playlist_updated"))
+    asyncio.create_task(_broadcast_content_refresh(user["id"], reason="playlist_updated"))
+    return r """
+
+@api.put("/client/playlists/{pid}")
+async def update_playlist(pid: str, body: PlaylistUpdate, user: dict = Depends(require_role("client"))):
+    upd: Dict[str, Any] = {}
+    if body.name is not None: upd["name"] = body.name
+    if body.branch_id is not None:
+        if body.branch_id:
+            branch = await db.branches.find_one({"id": body.branch_id, "client_id": user["id"]}, {"_id": 0, "id": 1, "name": 1})
+            if not branch:
+                raise HTTPException(status_code=400, detail="Branch not assigned to you")
+            upd["branch_id"] = body.branch_id
+            upd["branch_name"] = branch.get("name") or branch.get("id") or ""
+        else:
+            upd["branch_id"] = ""
+            upd["branch_name"] = ""
+    if body.template_id is not None: upd["template_id"] = body.template_id
+    
+    # ✅ FIX: Handle ticker_messages FIRST (outside if/else)
+    if body.ticker_messages is not None:
+        upd["ticker_messages"] = body.ticker_messages
+    
+    if body.zone_items is not None:
+        # Ensure zone_items keys match the template's zone ids if possible
+        tpl_id = body.template_id
+        if not tpl_id:
+            existing = await db.playlists.find_one({"id": pid, "client_id": user["id"]}, {"_id": 0, "template_id": 1})
+            tpl_id = existing.get("template_id") if existing else None
+        template_zone_ids = await _get_template_zone_ids(tpl_id)
+        incoming = body.zone_items or {}
+        has_match = any(k in template_zone_ids for k in incoming.keys())
+        if not has_match:
+            legacy_buckets = [incoming.get(k) or [] for k in ["main", "sidebar", "ticker"]]
+            zone_items = _remap_legacy_buckets_to_zone_ids(template_zone_ids, legacy_buckets)
+        else:
+            normalized = {k: v for k, v in incoming.items() if k in template_zone_ids}
+            legacy_buckets = [incoming.get(k) or [] for k in ["main", "sidebar", "ticker"]]
+            for idx, zid in enumerate(template_zone_ids):
+                if zid not in normalized:
+                    normalized[zid] = legacy_buckets[idx] if idx < len(legacy_buckets) else []
+            zone_items = normalized
+        upd["zone_items"] = {zone: [item.model_dump() for item in (items or [])] for zone, items in zone_items.items()}
+        all_media_ids = [item.media_id for items in zone_items.values() for item in (items or [])]
+        await _validate_media(all_media_ids, user["id"])
+    else:
+        # Legacy fields (only when zone_items is not provided)
+        legacy_zone_items: Dict[str, List[PlaylistItem]] = {}
+        if body.main_items is not None:
+            legacy_zone_items["main"] = body.main_items
+            upd["main_items"] = [i.model_dump() for i in body.main_items]
+        if body.sidebar_items is not None:
+            legacy_zone_items["sidebar"] = body.sidebar_items
+            upd["sidebar_items"] = [i.model_dump() for i in body.sidebar_items]
+        # ✅ Remove ticker_messages from here since it's already handled above
+        # if body.ticker_messages is not None:
+        #     upd["ticker_messages"] = body.ticker_messages
+        if legacy_zone_items:
+            existing = await db.playlists.find_one({"id": pid, "client_id": user["id"]}, {"_id": 0, "template_id": 1})
+            tpl_id = existing.get("template_id") if existing else None
+            template_zone_ids = await _get_template_zone_ids(tpl_id)
+            legacy_buckets = [legacy_zone_items.get(k) or [] for k in ["main", "sidebar", "ticker"]]
+            zone_items = _remap_legacy_buckets_to_zone_ids(template_zone_ids, legacy_buckets)
+            upd["zone_items"] = {zone: [item.model_dump() for item in items] for zone, items in zone_items.items()}
+            await _validate_media([item.media_id for items in legacy_zone_items.values() for item in items], user["id"])
+    
     if not upd: raise HTTPException(status_code=400, detail="Nothing to update")
     r = await db.playlists.find_one_and_update({"id": pid, "client_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0})
     if not r: raise HTTPException(status_code=404, detail="Playlist not found")
@@ -3271,6 +3340,16 @@ async def player_payload(pair_code: str, request: Request):
                 for key in ("title", "location", "temperature", "condition", "high", "low", "humidity", "entries", "notices"):
                     if item.get(key) is not None:
                         widget[key] = item.get(key)
+                # For the notices widget, always fetch live notices from the database
+                if widget_type == "notices":
+                    try:
+                        live_notices = await db.notices.find(
+                            {"client_id": device["client_id"], "is_deleted": {"$ne": True}},
+                            {"_id": 0}
+                        ).sort("created_at", -1).to_list(50)
+                        widget["notices"] = live_notices
+                    except Exception:
+                        widget["notices"] = []
                 out.append(widget)
             elif item.get("type") == "media" or item.get("media_id"):
                 # Media item - fetch from database

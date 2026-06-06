@@ -29,8 +29,9 @@ void main() {
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  runApp(const SignageApp());
+  runApp(SignageApp());
 }
+
 
 Map<String, dynamic> _decodeJsonMap(String source) {
   final decoded = jsonDecode(source);
@@ -66,6 +67,221 @@ String? _queueWaitLabel(Map<String, dynamic> entry) {
   final waitText = waitValue.toString().trim();
   if (waitText.isEmpty || waitText == '0') return null;
   return '${waitText}m';
+}
+
+class _CacheEntry {
+  final String url;
+  final String path;
+  int size;
+  DateTime lastAccess;
+
+  _CacheEntry(this.url, this.path, this.size, this.lastAccess);
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'path': path,
+    'size': size,
+    'lastAccess': lastAccess.toIso8601String(),
+  };
+
+  static _CacheEntry fromJson(Map<String, dynamic> j) => _CacheEntry(
+    (j['url'] ?? '').toString(),
+    (j['path'] ?? '').toString(),
+    int.tryParse((j['size'] ?? 0).toString()) ?? 0,
+    DateTime.tryParse((j['lastAccess'] ?? '').toString()) ?? DateTime.fromMillisecondsSinceEpoch(0),
+  );
+}
+
+class CacheManager {
+  static const int cacheMaxBytes = 1500 * 1024 * 1024;
+  static final Map<String, _CacheEntry> _manifest = {};
+  static Directory? _cacheDir;
+  static bool _initialized = false;
+  static final StreamController<Map<String, String>> _downloadController = StreamController<Map<String, String>>.broadcast();
+
+  static Stream<Map<String, String>> get downloadStream => _downloadController.stream;
+
+  static Future<void> init() async {
+    if (_initialized) return;
+    try {
+      _cacheDir = await getApplicationDocumentsDirectory();
+      final dir = Directory('${_cacheDir!.path}/media_cache');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      _cacheDir = dir;
+      final mf = File('${_cacheDir!.path}/cache_manifest.json');
+      if (await mf.exists()) {
+        try {
+          final text = await mf.readAsString();
+          final j = json.decode(text) as Map<String, dynamic>;
+          final entries = (j['entries'] as List<dynamic>?) ?? [];
+          for (final e in entries) {
+            try {
+              final ce = _CacheEntry.fromJson(e as Map<String, dynamic>);
+              _manifest[ce.url] = ce;
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    _initialized = true;
+  }
+
+  static String _fileNameForUrl(String url) {
+    final digest = sha1.convert(utf8.encode(url)).toString();
+    final extMatch = RegExp(r'(\.[a-zA-Z0-9]{1,5})(?:\?|#|$)').firstMatch(url);
+    final ext = extMatch != null ? extMatch.group(1) : '';
+    return '$digest$ext';
+  }
+
+  static Future<String?> getLocalPathIfExists(String url) async {
+    await init();
+    final entry = _manifest[url];
+    if (entry == null) return null;
+    final file = File(entry.path);
+    if (await file.exists()) {
+      entry.lastAccess = DateTime.now().toUtc();
+      unawaited(_persistManifest());
+      return entry.path;
+    }
+    _manifest.remove(url);
+    unawaited(_persistManifest());
+    return null;
+  }
+
+  static Future<void> ensureDownloaded(String url) async {
+    await init();
+    if (url.isEmpty) return;
+    final existing = _manifest[url];
+    if (existing != null) {
+      final existingFile = File(existing.path);
+      if (await existingFile.exists()) {
+        existing.lastAccess = DateTime.now().toUtc();
+        unawaited(_persistManifest());
+        return;
+      }
+      _manifest.remove(url);
+    }
+
+    if (_cacheDir == null) return;
+    final fname = _fileNameForUrl(url);
+    final dest = '${_cacheDir!.path}/$fname';
+    try {
+      final client = http.Client();
+      final resp = await client.send(http.Request('GET', Uri.parse(url)));
+      if (resp.statusCode != 200) {
+        client.close();
+        return;
+      }
+      final tmpFile = File('$dest.part');
+      final sink = tmpFile.openWrite();
+      int total = 0;
+      await for (final chunk in resp.stream) {
+        sink.add(chunk);
+        total += chunk.length;
+      }
+      await sink.close();
+      await tmpFile.rename(dest);
+      client.close();
+      await _enforceLimit(total);
+      _manifest[url] = _CacheEntry(url, dest, total, DateTime.now().toUtc());
+      unawaited(_persistManifest());
+      _downloadController.add({'url': url, 'path': dest});
+    } catch (_) {}
+  }
+
+  static Future<void> _enforceLimit(int incomingSize) async {
+    try {
+      var total = 0;
+      final entries = _manifest.values.toList()..sort((a, b) => a.lastAccess.compareTo(b.lastAccess));
+      for (final entry in entries) {
+        total += entry.size;
+      }
+      if (total + incomingSize <= cacheMaxBytes) return;
+      for (final entry in entries) {
+        try {
+          final file = File(entry.path);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+        _manifest.remove(entry.url);
+        total -= entry.size;
+        if (total + incomingSize <= cacheMaxBytes) break;
+      }
+      unawaited(_persistManifest());
+    } catch (_) {}
+  }
+
+  static Future<void> _persistManifest() async {
+    if (_cacheDir == null) return;
+    try {
+      final mf = File('${_cacheDir!.path}/cache_manifest.json');
+      final entries = _manifest.values.map((entry) => entry.toJson()).toList();
+      await mf.writeAsString(json.encode({'entries': entries}));
+    } catch (_) {}
+  }
+}
+
+class CachedImageWidget extends StatefulWidget {
+  final String url;
+  final BoxFit fit;
+
+  const CachedImageWidget({super.key, required this.url, required this.fit});
+
+  @override
+  State<CachedImageWidget> createState() => _CachedImageWidgetState();
+}
+
+class _CachedImageWidgetState extends State<CachedImageWidget> {
+  late Future<String?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = CacheManager.getLocalPathIfExists(widget.url);
+    unawaited(CacheManager.ensureDownloaded(widget.url));
+  }
+
+  @override
+  void didUpdateWidget(CachedImageWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _future = CacheManager.getLocalPathIfExists(widget.url);
+      unawaited(CacheManager.ensureDownloaded(widget.url));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return Container(color: Colors.black);
+        }
+        final path = snap.data;
+        if (path != null && path.isNotEmpty) {
+          return Image.file(
+            File(path),
+            fit: widget.fit,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+          );
+        }
+        return CachedNetworkImage(
+          imageUrl: widget.url,
+          fit: widget.fit,
+          fadeInDuration: Duration.zero,
+          placeholder: (context, url) => Container(color: Colors.black),
+          errorWidget: (context, url, error) => Container(
+            color: Colors.black,
+            child: const Center(
+              child: Icon(Icons.broken_image, color: Colors.white24, size: 48),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class SignageApp extends StatelessWidget {
@@ -157,156 +373,15 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
 
   // Simple on-device cache manager (manifest + LRU eviction)
   static const int _cacheMaxBytes = 1500 * 1024 * 1024; // 1.5 GB
-
-  static class _CacheEntry {
-    final String url;
-    final String path;
-    int size;
-    DateTime lastAccess;
-    _CacheEntry(this.url, this.path, this.size, this.lastAccess);
-    Map<String, dynamic> toJson() => {
-      'url': url,
-      'path': path,
-      'size': size,
-      'lastAccess': lastAccess.toIso8601String(),
-    };
-    static _CacheEntry fromJson(Map<String, dynamic> j) => _CacheEntry(
-      j['url'] ?? '', j['path'] ?? '', (j['size'] ?? 0) as int,
-      DateTime.tryParse(j['lastAccess'] ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
-    );
-  }
-
-  static class CacheManager {
-    static final Map<String, _CacheEntry> _manifest = {};
-    static Directory? _cacheDir;
-    static bool _initialized = false;
-    static final _downloadController = StreamController<Map<String, String>>.broadcast();
-
-    static Stream<Map<String, String>> get downloadStream => _downloadController.stream;
-
-    static Future<void> init() async {
-      if (_initialized) return;
-      try {
-        _cacheDir = await getApplicationDocumentsDirectory();
-        final dir = Directory('${_cacheDir!.path}/media_cache');
-        if (!await dir.exists()) await dir.create(recursive: true);
-        _cacheDir = dir;
-        final mf = File('${_cacheDir!.path}/cache_manifest.json');
-        if (await mf.exists()) {
-          try {
-            final text = await mf.readAsString();
-            final j = json.decode(text) as Map<String, dynamic>;
-            final entries = (j['entries'] as List<dynamic>?) ?? [];
-            for (final e in entries) {
-              try { final ce = _CacheEntry.fromJson(e as Map<String,dynamic>); _manifest[ce.url] = ce; } catch (_) {}
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-      _initialized = true;
-    }
-
-    static String _fileNameForUrl(String url) {
-      final bytes = utf8.encode(url);
-      final digest = sha1.convert(bytes).toString();
-      final extMatch = RegExp(r"(\.[a-zA-Z0-9]{1,5})(?:\?|#|\\z)").firstMatch(url);
-      final ext = extMatch != null ? extMatch.group(1) : '';
-      return '$digest$ext';
-    }
-
-    static Future<String?> getLocalPathIfExists(String url) async {
-      await init();
-      final e = _manifest[url];
-      if (e == null) return null;
-      final f = File(e.path);
-      if (await f.exists()) {
-        e.lastAccess = DateTime.now().toUtc();
-        unawaited(_persistManifest());
-        return e.path;
-      }
-      // missing on disk: remove
-      _manifest.remove(url);
-      unawaited(_persistManifest());
-      return null;
-    }
-
-    static Future<void> ensureDownloaded(String url) async {
-      await init();
-      if (url == null || url.isEmpty) return;
-      if (_manifest.containsKey(url)) {
-        final path = _manifest[url]!.path;
-        if (await File(path).exists()) {
-          _manifest[url]!.lastAccess = DateTime.now().toUtc();
-          unawaited(_persistManifest());
-          return;
-        } else {
-          _manifest.remove(url);
-        }
-      }
-
-      // start download
-      final fname = _fileNameForUrl(url);
-      final dest = '${_cacheDir!.path}/$fname';
-      try {
-        final client = http.Client();
-        final resp = await client.send(http.Request('GET', Uri.parse(url)));
-        if (resp.statusCode != 200) { client.close(); return; }
-        final tmpPath = '$dest.part';
-        final tmpFile = File(tmpPath);
-        final raf = tmpFile.openWrite();
-        int total = 0;
-        await for (final chunk in resp.stream) {
-          raf.add(chunk);
-          total += (chunk?.length ?? 0);
-        }
-        await raf.close();
-        await tmpFile.rename(dest);
-        client.close();
-
-        // enforce size limit
-        await _enforceLimit(total);
-
-        final entry = _CacheEntry(url, dest, total, DateTime.now().toUtc());
-        _manifest[url] = entry;
-        unawaited(_persistManifest());
-        // notify listeners
-        _downloadController.add({'url': url, 'path': dest});
-      } catch (e) {
-        // ignore download errors
-      }
-    }
-
-    static Future<void> _enforceLimit(int incomingSize) async {
-      try {
-        int total = 0;
-        final entries = <_CacheEntry>[];
-        for (final e in _manifest.values) { total += e.size; entries.add(e); }
-        // if available space already enough, return
-        if (total + incomingSize <= _cacheMaxBytes) return;
-        // evict LRU
-        entries.sort((a,b) => a.lastAccess.compareTo(b.lastAccess));
-        for (final e in entries) {
-          try {
-            final f = File(e.path);
-            if (await f.exists()) {
-              await f.delete();
-            }
-          } catch (_) {}
-          total -= e.size;
-          _manifest.remove(e.url);
-          if (total + incomingSize <= _cacheMaxBytes) break;
-        }
-        unawaited(_persistManifest());
-      } catch (_) {}
-    }
-
-    static Future<void> _persistManifest() async {
-      if (_cacheDir == null) return;
-      try {
-        final mf = File('${_cacheDir!.path}/cache_manifest.json');
-        final entries = _manifest.values.map((e) => e.toJson()).toList();
-        await mf.writeAsString(json.encode({'entries': entries}));
-      } catch (_) {}
+  Future<void> _initTts() async {
+    try {      _flutterTts = FlutterTts();
+    // Set queue mode to 1 (enqueue) for Android
+    await _flutterTts?.setQueueMode(1);
+    _ttsReady = true;
+    debugPrint("TTS INITIALIZED SUCCESSFULLY");
+    } catch (e) {
+      debugPrint("TTS INIT ERROR: $e");
+      _ttsReady = false;
     }
   }
 
@@ -318,34 +393,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
     _loadPreferences();
     _applyAndroidKioskMode();
     _initTts();
+    CacheManager.init();
   }
 
-  Future<void> _initTts() async {
-    try {
-      _flutterTts = FlutterTts();
-
-      await _flutterTts?.setLanguage('en-US');
-
-      await _flutterTts?.setVolume(1.0);
-
-      await _flutterTts?.setSpeechRate(0.50);
-
-      await _flutterTts?.setPitch(1.0);
-
-      await _flutterTts?.awaitSpeakCompletion(true);
-
-      await _flutterTts?.setSharedInstance(true);
-
-      await _flutterTts?.setQueueMode(1);
-
-      _ttsReady = true;
-
-      debugPrint("TTS INITIALIZED SUCCESSFULLY");
-    } catch (e) {
-      debugPrint("TTS INIT ERROR: $e");
-      _ttsReady = false;
-    }
-  }
 
   @override
   void dispose() {
@@ -571,11 +621,26 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
         final zones = data['zones'];
         final template = data['template'];
         _logDebug('poll success device=${data['device_name']} zoneKeys=${zones is Map ? zones.keys.join(',') : 'n/a'} template=${template is Map ? 'present' : 'missing'}');
-        _safeSetState(() {
-          payload = data;
-          errorMessage = "";
-          pairingError = "";
-        });
+
+       
+        final newDataString = json.encode(data);
+        final oldDataString = payload != null ? json.encode(payload) : '';
+
+        // Instead of setState that rebuilds everything, only update specific data
+        if (newDataString != oldDataString) {
+          // Only update payload if zones/template changed
+          final oldZones = payload?['zones'];
+          final newZones = data['zones'];
+          if (json.encode(oldZones) != json.encode(newZones)) {
+            _safeSetState(() {
+              payload = data;
+            });
+            SharedPreferences.getInstance().then((prefs) {
+              prefs.setString('cached_payload', newDataString);
+            });
+          }
+        }
+        
 
         // start cache manager and kick off background downloads for media in payload
         unawaited(CacheManager.init());
@@ -609,7 +674,22 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
       }
     } catch (e) {
       _logDebug('poll exception: $e');
-      _safeSetState(() => errorMessage = "Connection error: ${e.toString()}");
+      if (payload == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final cached = prefs.getString('cached_payload');
+        if (cached != null) {
+          try {
+            final data = json.decode(cached);
+            _safeSetState(() => payload = data);
+            unawaited(CacheManager.init());
+            unawaited(_ensureMediaCached(data));
+          } catch (_) {}
+        }
+      }
+      
+      if (payload == null) {
+        _safeSetState(() => errorMessage = "Connection error: ${e.toString()}");
+      }
     }
 
     pollTimer?.cancel();
@@ -678,10 +758,20 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
         final items = (zones[zid] as List<dynamic>?) ?? [];
         for (final it in items) {
           if (it is Map<String, dynamic>) {
-            final url = (it['url'] ?? it['content'] ?? it['media_url'] ?? it['media'] ?? '')?.toString() ?? '';
-            if (url.isNotEmpty && !seen.contains(url)) {
-              seen.add(url);
-              unawaited(CacheManager.ensureDownloaded(url));
+            final candidate = (it['url'] ?? it['content'] ?? it['media_url'] ?? it['media'] ?? '')?.toString() ?? 
+                              (it['media_id'] != null ? '/api/media/${it['media_id']}' : '');
+            
+            if (candidate.isNotEmpty) {
+              String resolvedUrl = candidate;
+              if (!candidate.startsWith('http://') && !candidate.startsWith('https://') && !candidate.startsWith('data:')) {
+                final base = _normalizedApiBase();
+                resolvedUrl = candidate.startsWith('/') ? '$base$candidate' : '$base/$candidate';
+              }
+              
+              if (!seen.contains(resolvedUrl)) {
+                seen.add(resolvedUrl);
+                unawaited(CacheManager.ensureDownloaded(resolvedUrl));
+              }
             }
           }
         }
@@ -691,30 +781,7 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
     }
   }
 
-  Widget _cachedImage(String url, BoxFit fit) {
-    return FutureBuilder<String?>(
-      future: CacheManager.getLocalPathIfExists(url),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          // ensure download started while we wait
-          unawaited(CacheManager.ensureDownloaded(url));
-          return Container(color: Colors.black, child: const Center(child: CircularProgressIndicator()));
-        }
-        final path = snap.data;
-        if (path != null && path.isNotEmpty) {
-          return Image.file(File(path), fit: fit, width: double.infinity, height: double.infinity, gaplessPlayback: true);
-        }
-        // fallback to network image and trigger background download
-        unawaited(CacheManager.ensureDownloaded(url));
-        return CachedNetworkImage(
-          imageUrl: url,
-          fit: fit,
-          placeholder: (context, url) => Container(color: Colors.black, child: const Center(child: CircularProgressIndicator())),
-          errorWidget: (context, url, error) => Container(color: Colors.black, child: const Center(child: Icon(Icons.broken_image, color: Colors.white24, size: 48))),
-        );
-      },
-    );
-  }
+
 
   String _queueSocketUrl() {
     final base = _normalizedApiBase();
@@ -1579,7 +1646,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
     _logDebug('build showSplash=$showSplash showPairing=$showPairing pairCode=$currentPairCode payload=${payload == null ? 'null' : 'ready'} error=${errorMessage.isNotEmpty ? errorMessage : 'none'}');
 
     if (showSplash) {
-      return const ModernSplashScreen();
+      return ModernSplashScreen(onComplete: () {
+        _safeSetState(() => showSplash = false);
+      });
     }
 
     if (showPairing) {
@@ -1664,8 +1733,18 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
         .toList();
 
     final hasContent = visibleZones.any((z) {
-      final items = payload?['zones']?[z['id']] ?? [];
-      return items.isNotEmpty;
+      final zoneId = z['id']?.toString() ?? '';
+      final zoneName = z['name']?.toString() ?? '';
+      final zoneRole = z['role']?.toString() ?? '';
+      final items = payload?['zones']?[zoneId] ?? [];
+      
+      if (items.isNotEmpty) return true;
+      if (_isQueueZone(zoneId, zoneName, zoneRole)) return true;
+      if (_isAutoWidgetZone(zoneRole)) return true;
+      if (_isTickerZone(zoneId, zoneName)) return true;
+      if (_isLogoZone(zoneId, zoneName, zoneRole) && _getClientLogoUrl() != null) return true;
+      
+      return false;
     });
 
     _logDebug('player screen zones=${zoneDefs.length} visible=${visibleZones.length} hasContent=$hasContent hidden=${hiddenZoneIds.length} payloadZones=${(payload?['zones'] is Map) ? (payload?['zones'] as Map).length : 0}');
@@ -2028,7 +2107,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
           width: rect['width']! * scaleX,
           height: rect['height']! * scaleY,
           child: ClipRect(
-            child: _buildZone(zone, items, canvasWidth, canvasHeight),
+            child: RepaintBoundary(
+              child: _buildZone(zone, items, canvasWidth, canvasHeight),
+            ),
           ),
         );
       }).toList(),
@@ -2049,7 +2130,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
       final items = List<Map<String, dynamic>>.from(
         payload?['zones']?[zone['id']] ?? [],
       );
-      return _buildZone(zone, items, canvasWidth, canvasHeight);
+      return RepaintBoundary(
+        child: _buildZone(zone, items, canvasWidth, canvasHeight),
+      );
     }
 
     // Use Column with Expanded to prevent overflow
@@ -2070,7 +2153,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
                   maxHeight: constraints.maxHeight,
                 ),
                 child: ClipRect(
-                  child: _buildZone(zone, items, canvasWidth, canvasHeight),
+                  child: RepaintBoundary(
+                    child: _buildZone(zone, items, canvasWidth, canvasHeight),
+                  ),
                 ),
               );
             },
@@ -2181,7 +2266,7 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
                 color: Colors.white.withOpacity(0.05),
               ),
               padding: const EdgeInsets.all(16),
-              child: _cachedImage(logoUrl, BoxFit.contain),
+              child: CachedImageWidget(url: logoUrl, fit: BoxFit.contain),
             ),
           ),
         );
@@ -2268,13 +2353,13 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
   }
 
   List<dynamic> _getQueuePreview() {
-    final providerPreview = providerData?['queue_preview'];
-    if (providerPreview is List && providerPreview.isNotEmpty) {
-      return providerPreview;
+    if (providerData != null && providerData!.containsKey('queue_preview')) {
+      final q = providerData!['queue_preview'];
+      return q is List ? q : [];
     }
 
     final payloadPreview = payload?['queue_preview'];
-    if (payloadPreview is List && payloadPreview.isNotEmpty) {
+    if (payloadPreview is List) {
       return payloadPreview;
     }
 
@@ -2282,13 +2367,13 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
   }
 
   List<dynamic> _getNotices() {
-    final providerNotices = providerData?['notices'];
-    if (providerNotices is List && providerNotices.isNotEmpty) {
-      return providerNotices;
+    if (providerData != null && providerData!.containsKey('notices')) {
+      final n = providerData!['notices'];
+      return n is List ? n : [];
     }
 
     final payloadNotices = payload?['notices'];
-    if (payloadNotices is List && payloadNotices.isNotEmpty) {
+    if (payloadNotices is List) {
       return payloadNotices;
     }
 
@@ -2467,6 +2552,38 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
                             ),
                             const SizedBox(height: 16),
                             const Text(
+                              'CACHE STATUS',
+                              style: TextStyle(
+                                fontSize: 10,
+                                letterSpacing: 3,
+                                color: Colors.white38,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Builder(
+                              builder: (context) {
+                                final count = CacheManager._manifest.length;
+                                final bytes = CacheManager._manifest.values.fold<int>(0, (sum, e) => sum + e.size);
+                                final mb = (bytes / (1024 * 1024)).toStringAsFixed(1);
+                                return Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    _buildMenuButtonItem(
+                                      icon: Icons.sd_storage,
+                                      label: 'Cached: $count items ($mb MB)',
+                                      onTap: () {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('All files are stored in local storage for offline playback.'), duration: Duration(seconds: 2)),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                );
+                              }
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
                               'BRIGHTNESS',
                               style: TextStyle(
                                 fontSize: 10,
@@ -2583,6 +2700,30 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
                                     spacing: 8,
                                     runSpacing: 8,
                                     children: [
+                                      _buildPresetChoice(
+                                        label: '30%',
+                                        selected: (weatherClockScale - 0.3).abs() < 0.01,
+                                        onTap: () => _setWeatherClockScale(0.3),
+                                        icon: Icons.text_fields,
+                                      ),
+                                      _buildPresetChoice(
+                                        label: '40%',
+                                        selected: (weatherClockScale - 0.4).abs() < 0.01,
+                                        onTap: () => _setWeatherClockScale(0.4),
+                                        icon: Icons.text_fields,
+                                      ),
+                                      _buildPresetChoice(
+                                      label: '50%',
+                                      selected: (weatherClockScale - 0.5).abs() < 0.01,
+                                      onTap: () => _setWeatherClockScale(0.5),
+                                      icon: Icons.text_fields,
+                                    ),
+                                      _buildPresetChoice(
+                                        label: '60%',
+                                        selected: (weatherClockScale - 0.6).abs() < 0.01,
+                                        onTap: () => _setWeatherClockScale(0.6),
+                                        icon: Icons.text_fields,
+                                      ),
                                       _buildPresetChoice(
                                         label: '70%',
                                         selected: (weatherClockScale - 0.7).abs() < 0.01,
@@ -3137,7 +3278,8 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
 
 // Splash Screen (same as before, no changes needed)
 class ModernSplashScreen extends StatefulWidget {
-  const ModernSplashScreen({super.key});
+  final VoidCallback onComplete;
+  const ModernSplashScreen({super.key, required this.onComplete});
 
   @override
   State<ModernSplashScreen> createState() => _ModernSplashScreenState();
@@ -3183,9 +3325,7 @@ class _ModernSplashScreenState extends State<ModernSplashScreen>
     Future.delayed(const Duration(seconds: 3), () {
       dotTimer?.cancel();
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const SignagePlayer()),
-        );
+        widget.onComplete();
       }
     });
   }
@@ -3697,7 +3837,7 @@ class _MediaSlotState extends State<MediaSlot> {
   int currentIndex = 0;
   Timer? timer;
   Timer? controlsHideTimer;
-  bool showFrame = true;
+ //bool showFrame = true;
   bool isMuted = false;
   bool showPlaybackControls = false;
   String? videoError;
@@ -3706,6 +3846,7 @@ class _MediaSlotState extends State<MediaSlot> {
   bool _videoCompletionHandled = false;
   bool _youtubeCompletionHandled = false;
   String? _activeVideoSourceKey;
+  StreamSubscription? _cacheSubscription;
 
   void _pausePlaybackForFocusLoss() {
     // Left in place for compatibility, but we no longer pause other zones.
@@ -3714,8 +3855,45 @@ class _MediaSlotState extends State<MediaSlot> {
   @override
   void initState() {
     super.initState();
+    _cacheSubscription = CacheManager.downloadStream.listen(_onCacheDownload);
     if (widget.items.isNotEmpty) {
+      _initCurrentItem();
       _setupTimer();
+    }
+  }
+
+  void _initCurrentItem() {
+    if (widget.items.isEmpty) return;
+    final item = widget.items[currentIndex];
+    final itemType = _resolveItemType(item);
+    if (itemType == 'video') _initVideo(item);
+    if (itemType == 'youtube') _initYoutube(item);
+  }
+
+  Future<void> _onCacheDownload(Map<String, String> evt) async {
+    final evUrl = evt['url'] ?? '';
+    final path = evt['path'] ?? '';
+    if (!mounted || path.isEmpty) return;
+    if (widget.items.isEmpty) return;
+    final item = widget.items[currentIndex];
+    final url = _resolveUrl(item);
+    final mediaId = item['media_id']?.toString();
+    final sourceKey = (mediaId != null && mediaId.isNotEmpty) ? 'media:$mediaId' : 'url:$url';
+
+    if (evUrl == url && _activeVideoSourceKey == sourceKey) {
+      try {
+        final pos = videoController?.value.position ?? Duration.zero;
+        final wasPlaying = videoController?.value.isPlaying ?? false;
+        await videoController?.pause();
+        await videoController?.dispose();
+        videoController = VideoPlayerController.file(File(path), videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true));
+        await videoController?.initialize();
+        await videoController?.seekTo(pos);
+        videoController?.setLooping(widget.items.length == 1);
+        videoController?.setVolume(isMuted ? 0.0 : 1.0);
+        if (wasPlaying) videoController?.play();
+        if (mounted) setState(() {});
+      } catch (_) {}
     }
   }
 
@@ -3723,7 +3901,9 @@ class _MediaSlotState extends State<MediaSlot> {
   void didUpdateWidget(MediaSlot oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_itemsSignature(oldWidget.items) != _itemsSignature(widget.items)) {
+      _disposePlaybackControllers();
       setState(() => currentIndex = 0);
+      _initCurrentItem();
       _setupTimer();
     }
   }
@@ -3851,13 +4031,22 @@ class _MediaSlotState extends State<MediaSlot> {
   void _nextItem() {
     if (!mounted) return;
     controlsHideTimer?.cancel();
-    _disposePlaybackControllers();
+    
+    // Check if we are moving to a non-video/youtube item next
+    final nextIndex = (currentIndex + 1) % widget.items.length;
+    final nextItem = widget.items[nextIndex];
+    final nextType = _resolveItemType(nextItem);
+    if (nextType != 'video' && nextType != 'youtube') {
+      _disposePlaybackControllers();
+    }
+
     setState(() {
-      currentIndex = (currentIndex + 1) % widget.items.length;
-      showFrame = true;
+      currentIndex = nextIndex;
       videoError = null;
       showPlaybackControls = false;
     });
+    
+    _initCurrentItem();
     _setupTimer();
   }
 
@@ -3901,6 +4090,7 @@ class _MediaSlotState extends State<MediaSlot> {
   @override
   void dispose() {
     MediaSlot._releaseAudioFocus(this);
+    _cacheSubscription?.cancel();
     timer?.cancel();
     controlsHideTimer?.cancel();
     youtubeController?.dispose();
@@ -3941,10 +4131,6 @@ class _MediaSlotState extends State<MediaSlot> {
     final item = widget.items[currentIndex];
     final itemType = _resolveItemType(item);
 
-    if (itemType != 'video' && itemType != 'youtube') {
-      _disposePlaybackControllers();
-    }
-
     Widget content;
 
     switch (itemType) {
@@ -3974,20 +4160,14 @@ class _MediaSlotState extends State<MediaSlot> {
         content = _buildMedia(item);
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ClipRect(
-          child: FittedBox(
-            fit: BoxFit.contain,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              child: content,
-            ),
-          ),
-        );
-      },
+    return RepaintBoundary(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 500),
+        child: KeyedSubtree(
+          key: ValueKey('$currentIndex:${_resolveUrl(item)}'),
+          child: SizedBox.expand(child: content),
+        ),
+      ),
     );
   }
 
@@ -4131,6 +4311,25 @@ class _MediaSlotState extends State<MediaSlot> {
                     ),
                   ),
                 ),
+                if (hasVideo && videoController!.dataSourceType == DataSourceType.file) ...[
+                  const SizedBox(width: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.green.withOpacity(0.5)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.sd_storage, color: Colors.greenAccent, size: 14),
+                        SizedBox(width: 4),
+                        Text('LOCAL CACHE', style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  )
+                ],
               ],
             ),
           ),
@@ -4446,6 +4645,40 @@ class _MediaSlotState extends State<MediaSlot> {
     );
   }
 
+  void _initYoutube(Map<String, dynamic> item) {
+    final videoId = _getYoutubeId(item['url']?.toString() ?? '');
+    if (videoId == null) return;
+    
+    if (youtubeController == null || youtubeController!.initialVideoId != videoId) {
+      youtubeController?.dispose();
+      _youtubeCompletionHandled = false;
+      youtubeController = YoutubePlayerController(
+        initialVideoId: videoId,
+        flags: YoutubePlayerFlags(
+          autoPlay: true,
+          mute: isMuted,
+          hideControls: true,
+          controlsVisibleAtStart: true,
+          disableDragSeek: false,
+        ),
+      );
+      MediaSlot._claimAudioFocus(this);
+      _applyMuteState();
+      youtubeController!.addListener(() {
+        final state = youtubeController!.value.playerState;
+        if (state == PlayerState.ended && !_youtubeCompletionHandled) {
+          _youtubeCompletionHandled = true;
+          _handleMediaCompletion(() {
+            youtubeController?.seekTo(Duration.zero);
+            youtubeController?.play();
+          });
+        } else if (state != PlayerState.ended) {
+          _youtubeCompletionHandled = false;
+        }
+      });
+    }
+  }
+
   Widget _buildYoutube(Map<String, dynamic> item) {
     final videoId = _getYoutubeId(item['url']?.toString() ?? '');
     if (videoId == null) return const SizedBox();
@@ -4486,34 +4719,7 @@ class _MediaSlotState extends State<MediaSlot> {
       );
     }
 
-    if (youtubeController == null || youtubeController!.initialVideoId != videoId) {
-      youtubeController?.dispose();
-      _youtubeCompletionHandled = false;
-      youtubeController = YoutubePlayerController(
-        initialVideoId: videoId,
-        flags: YoutubePlayerFlags(
-          autoPlay: true,
-          mute: isMuted,
-          hideControls: false,
-          controlsVisibleAtStart: true,
-          disableDragSeek: false,
-        ),
-      );
-      MediaSlot._claimAudioFocus(this);
-      _applyMuteState();
-      youtubeController!.addListener(() {
-        final state = youtubeController!.value.playerState;
-        if (state == PlayerState.ended && !_youtubeCompletionHandled) {
-          _youtubeCompletionHandled = true;
-          _handleMediaCompletion(() {
-            youtubeController?.seekTo(Duration.zero);
-            youtubeController?.play();
-          });
-        } else if (state != PlayerState.ended) {
-          _youtubeCompletionHandled = false;
-        }
-      });
-    } else {
+    if (youtubeController != null) {
       final state = youtubeController!.value.playerState;
       if (state == PlayerState.ended) {
         youtubeController!.seekTo(Duration.zero);
@@ -4521,6 +4727,10 @@ class _MediaSlotState extends State<MediaSlot> {
       } else if (!youtubeController!.value.isPlaying) {
         youtubeController!.play();
       }
+    }
+    
+    if (youtubeController == null) {
+      return Container(color: Colors.black);
     }
 
     return YoutubePlayer(
@@ -4534,9 +4744,9 @@ class _MediaSlotState extends State<MediaSlot> {
     );
   }
 
-  Widget _buildVideo(Map<String, dynamic> item) {
+  void _initVideo(Map<String, dynamic> item) {
     final url = _resolveUrl(item);
-    if (url.isEmpty) return const SizedBox();
+    if (url.isEmpty) return;
 
     final mediaId = item['media_id']?.toString();
     final sourceKey = (mediaId != null && mediaId.isNotEmpty) ? 'media:$mediaId' : 'url:$url';
@@ -4546,12 +4756,27 @@ class _MediaSlotState extends State<MediaSlot> {
       videoError = null;
       _videoCompletionHandled = false;
       _activeVideoSourceKey = sourceKey;
-      videoController = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      )
-        ..initialize().then((_) {
-          if (mounted) setState(() {});
+      
+      CacheManager.getLocalPathIfExists(url).then((localPath) {
+        if (!mounted) return;
+        if (_activeVideoSourceKey != sourceKey) return;
+
+        if (localPath != null && localPath.isNotEmpty) {
+          videoController = VideoPlayerController.file(
+            File(localPath),
+            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          );
+        } else {
+          videoController = VideoPlayerController.networkUrl(
+            Uri.parse(url),
+            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          );
+        }
+
+        videoController!.initialize().then((_) {
+          if (!mounted) return;
+          if (_activeVideoSourceKey != sourceKey) return;
+          setState(() {});
           MediaSlot._claimAudioFocus(this);
           videoController!.setLooping(widget.items.length == 1);
           videoController!.setVolume(isMuted ? 0.0 : 1.0);
@@ -4599,35 +4824,21 @@ class _MediaSlotState extends State<MediaSlot> {
             }
           });
         }).catchError((error) {
-          if (mounted) {
+          if (mounted && _activeVideoSourceKey == sourceKey) {
             setState(() {
               videoError = error.toString();
             });
           }
         });
-      // start background download; when complete, switch to local file
-      CacheManager.downloadStream.listen((evt) async {
-        try {
-          final evUrl = evt['url'] ?? '';
-          final path = evt['path'] ?? '';
-          if (evUrl == url && path.isNotEmpty && mounted && _activeVideoSourceKey == sourceKey) {
-            try {
-              final pos = videoController?.value.position ?? Duration.zero;
-              final wasPlaying = videoController?.value.isPlaying ?? false;
-              await videoController?.pause();
-              await videoController?.dispose();
-              videoController = VideoPlayerController.file(File(path), videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true));
-              await videoController?.initialize();
-              await videoController?.seekTo(pos);
-              videoController?.setLooping(widget.items.length == 1);
-              videoController?.setVolume(isMuted ? 0.0 : 1.0);
-              if (wasPlaying) videoController?.play();
-              if (mounted) setState(() {});
-            } catch (_) {}
-          }
-        } catch (_) {}
       });
-    } else {
+    }
+  }
+
+  Widget _buildVideo(Map<String, dynamic> item) {
+    final url = _resolveUrl(item);
+    if (url.isEmpty) return const SizedBox();
+
+    if (videoController != null) {
       final v = videoController!.value;
       if (v.isInitialized && !v.isPlaying) {
         final ended = _isVideoPlaybackCompleted(v);
@@ -4884,6 +5095,71 @@ class _MediaSlotState extends State<MediaSlot> {
         (item['notices'] as List<dynamic>?) ??
         widget.notices;
 
+    // HERO LAYOUT
+    if (notices.length == 1 &&
+        (notices.first as Map)['image_url'] != null &&
+        (notices.first as Map)['image_url'].toString().isNotEmpty) {
+      final notice = notices.first as Map<String, dynamic>;
+      final imgSrc = _resolveUrl({'url': notice['image_url']});
+      return SizedBox.expand(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            CachedImageWidget(url: imgSrc, fit: BoxFit.cover),
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.black.withOpacity(0.1), Colors.black.withOpacity(0.4), Colors.black.withOpacity(0.9)],
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 20,
+              left: 20,
+              right: 20,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    (item['title'] ?? 'Notice').toString().toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      letterSpacing: 4.5,
+                      color: Colors.white.withOpacity(0.5),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    notice['title']?.toString() ?? 'Notice',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  if (notice['body'] != null || notice['text'] != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      notice['body']?.toString() ?? notice['text']?.toString() ?? '',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white.withOpacity(0.8),
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       width: double.infinity,
       height: double.infinity,
@@ -4936,41 +5212,61 @@ class _MediaSlotState extends State<MediaSlot> {
                 : ListView.builder(
               itemCount: notices.length.clamp(0, 4),
               itemBuilder: (context, index) {
-                final notice = notices[index] as Map<String, dynamic>;
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        notice['title']?.toString() ?? 'Notice',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
+                  final notice = notices[index] as Map<String, dynamic>;
+                  final hasImage = notice['image_url'] != null && notice['image_url'].toString().isNotEmpty;
+                  final imgSrc = hasImage ? _resolveUrl({'url': notice['image_url']}) : null;
+                  
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (imgSrc != null)
+                            SizedBox(
+                              width: 64,
+                              child: CachedImageWidget(url: imgSrc, fit: BoxFit.cover),
+                            ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    notice['title']?.toString() ?? 'Notice',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    notice['body']?.toString() ??
+                                        notice['text']?.toString() ?? '',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.7),
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        notice['body']?.toString() ??
-                            notice['text']?.toString() ?? '',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+                    ),
+                  );
+                },
+              ),
           ),
         ],
       ),
@@ -4982,7 +5278,7 @@ class _MediaSlotState extends State<MediaSlot> {
     if (url.isEmpty) return Container(color: Colors.black);
 
     if (_isImage(url)) {
-      return _cachedImage(url, _getMediaFit());
+      return CachedImageWidget(url: url, fit: _getMediaFit());
     }
 
     return Container(color: Colors.black);
@@ -4996,12 +5292,20 @@ class _MediaSlotState extends State<MediaSlot> {
         (item['media_id'] != null ? '/api/media/${item['media_id']}' : '');
 
     if (candidate.isEmpty) return '';
+
+    final base = _normalizedApiBase();
+
+    if (candidate.contains('/api/media/serve/')) {
+      final idx = candidate.indexOf('/api/media/serve/');
+      final path = candidate.substring(idx);
+      return '$base$path';
+    }
+
     if (candidate.startsWith('http://') || candidate.startsWith('https://') ||
         candidate.startsWith('data:')) {
       return candidate;
     }
 
-    final base = 'https://rpsignage.com';
     if (candidate.startsWith('/')) return '$base$candidate';
     return '$base/$candidate';
   }

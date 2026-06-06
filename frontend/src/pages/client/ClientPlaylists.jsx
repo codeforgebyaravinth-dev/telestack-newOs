@@ -423,6 +423,11 @@ export default function ClientPlaylists() {
       if (playlist.sidebar_items) mappedZoneItems.sidebar = playlist.sidebar_items;
     }
     setForm({ name: playlist.name, branch_id: playlist.branch_id || "", template_id: templateId, zone_items: mappedZoneItems, ticker_messages: tickerMessages });
+
+     setTimeout(() => {
+    console.log("📂 AFTER SETFORM - form.ticker_messages:", form.ticker_messages);
+  }, 100);
+  
     setOpen(true);
     if (templateId) applyTemplate(templateId, { ...mappedZoneItems, ticker_messages: tickerMessages });
     setActiveZone(zoneDefs[0]?.id || "main");
@@ -430,6 +435,8 @@ export default function ClientPlaylists() {
 
   const submit = async (e) => {
     e.preventDefault();
+     console.log("🔵 SUBMIT - form.ticker_messages BEFORE:", form.ticker_messages);
+    console.log("🔵 SUBMIT - form.zone_items:", form.zone_items);
     try {
       const payload = {
         name: form.name,
@@ -438,6 +445,7 @@ export default function ClientPlaylists() {
         zone_items: form.zone_items,
         ticker_messages: form.ticker_messages || [],
       };
+        console.log("🔵 SUBMIT - payload.ticker_messages:", payload.ticker_messages);s
       if (editing) await api.put(`/client/playlists/${editing.id}`, payload);
       else await api.post("/client/playlists", payload);
       toast.success(editing ? "Playlist updated" : "Playlist created");
@@ -567,9 +575,12 @@ export default function ClientPlaylists() {
                 <TabsContent key={zone.id} value={zone.id}>
                   {isTickerZone(zone) ? (
                     <TickerEditor
-                      items={form.ticker_messages || []}
-                      setItems={(nextItems) => setForm({ ...form, ticker_messages: nextItems })}
-                    />
+  items={form.ticker_messages || []}
+  setItems={(nextItems) => {
+    console.log("🟣 TickerEditor setItems called with:", nextItems);
+    setForm({ ...form, ticker_messages: nextItems });
+  }}
+/>
                   ) : isAutoZone(zone) ? (
                     <div className="rounded-sm border border-dashed border-[#D1D5DB] bg-[#F9FAFB] p-4 text-sm text-[#6B7280]">
                       <div className="font-semibold text-[#111827]">Automatic queue zone</div>

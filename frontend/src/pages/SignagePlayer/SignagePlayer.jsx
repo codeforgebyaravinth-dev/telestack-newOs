@@ -244,17 +244,17 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
       if (videoElemRef.current) {
         videoElemRef.current.muted = Boolean(isMuted);
       }
-    } catch (e) {}
+    } catch (e) { }
 
     try {
       if (youtubePlayerRef.current) {
         if (isMuted) {
-          try { youtubePlayerRef.current.mute(); } catch {}
+          try { youtubePlayerRef.current.mute(); } catch { }
         } else {
-          try { youtubePlayerRef.current.unMute ? youtubePlayerRef.current.unMute() : youtubePlayerRef.current.unmute && youtubePlayerRef.current.unmute(); } catch {}
+          try { youtubePlayerRef.current.unMute ? youtubePlayerRef.current.unMute() : youtubePlayerRef.current.unmute && youtubePlayerRef.current.unmute(); } catch { }
         }
       }
-    } catch (e) {}
+    } catch (e) { }
   }, [isMuted]);
 
   useEffect(() => {
@@ -283,7 +283,7 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
     // If there's no YouTube item active, destroy any existing player and exit
     if (!cur || !isYoutube) {
       if (youtubePlayerRef.current) {
-        try { youtubePlayerRef.current.destroy(); } catch {};
+        try { youtubePlayerRef.current.destroy(); } catch { };
         youtubePlayerRef.current = null;
         currentYoutubeIdRef.current = null;
       }
@@ -301,13 +301,13 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
 
       // If same video already loaded, ensure it's playing and do nothing else
       if (youtubePlayerRef.current && currentYoutubeIdRef.current === videoId) {
-        try { youtubePlayerRef.current.playVideo && youtubePlayerRef.current.playVideo(); } catch {}
+        try { youtubePlayerRef.current.playVideo && youtubePlayerRef.current.playVideo(); } catch { }
         return;
       }
 
       // Different video: destroy existing and create new
       if (youtubePlayerRef.current) {
-        try { youtubePlayerRef.current.destroy(); } catch {};
+        try { youtubePlayerRef.current.destroy(); } catch { };
         youtubePlayerRef.current = null;
         currentYoutubeIdRef.current = null;
       }
@@ -327,8 +327,8 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
           onReady: (event) => {
             try {
               if (isMutedRef.current) event.target.mute(); else event.target.unMute();
-            } catch (e) {}
-            try { event.target.playVideo(); } catch (e) {}
+            } catch (e) { }
+            try { event.target.playVideo(); } catch (e) { }
             currentYoutubeIdRef.current = videoId;
           },
           onStateChange: (event) => {
@@ -343,7 +343,7 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
     return () => {
       cancelled = true;
       if (youtubePlayerRef.current) {
-        try { youtubePlayerRef.current.destroy(); } catch {}
+        try { youtubePlayerRef.current.destroy(); } catch { }
         youtubePlayerRef.current = null;
         currentYoutubeIdRef.current = null;
       }
@@ -354,7 +354,7 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
   useEffect(() => {
     return () => {
       if (youtubePlayerRef.current) {
-        try { youtubePlayerRef.current.destroy(); } catch {};
+        try { youtubePlayerRef.current.destroy(); } catch { };
         youtubePlayerRef.current = null;
         currentYoutubeIdRef.current = null;
       }
@@ -371,7 +371,9 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
 
   const cur = items[idx];
   if (!cur) return null;
-  const itemType = String(cur.kind || cur.type || "").toLowerCase();
+  // const itemType = String(cur.kind || cur.type || "").toLowerCase();
+  const itemType = String(cur.type || cur.kind || "").toLowerCase();
+  //console.log("🔍 MediaSlot - itemType:", itemType, "cur.type:", cur.type, "cur.kind:", cur.kind);
 
   if (itemType === "clock") {
     const now = new Date();
@@ -492,22 +494,80 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
   }
 
   if (itemType === "notices") {
-    const notices = Array.isArray(cur.items) ? cur.items : Array.isArray(cur.notices) ? cur.notices : [];
+    const notices = Array.isArray(cur.notices) ? cur.notices : Array.isArray(cur.items) ? cur.items : [];
+
+    const resolveNoticeImg = (url) => {
+      if (!url) return "";
+      if (/^data:/i.test(url)) return url;
+
+      // If the backend stored an absolute URL pointing to the frontend dev server, 
+      // extract the path and route it to the actual API BASE.
+      if (url.includes("/api/media/serve/")) {
+        const pathMatch = url.match(/(\/api\/media\/serve\/.*)$/);
+        if (pathMatch) {
+          return `${BASE}${pathMatch[1]}`;
+        }
+      }
+
+      if (/^https?:\/\//i.test(url)) return url;
+      return `${BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+    };
+
+    // If there is exactly one notice with an image, use a full-bleed hero layout
+    if (notices.length === 1 && notices[0]?.image_url) {
+      const notice = notices[0];
+      const imgSrc = resolveNoticeImg(notice.image_url);
+      return (
+        <div className="w-full h-full relative overflow-hidden text-white">
+          <img
+            src={imgSrc}
+            alt={notice.title || "Notice"}
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+          {/* Dark gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/10" />
+          {/* Text overlay */}
+          <div className="absolute bottom-0 left-0 right-0 p-5">
+            <div className="text-[10px] uppercase tracking-[0.45em] text-white/50 mb-1">{cur.title || "Notice"}</div>
+            <div className="font-bold text-xl leading-tight">{notice.title || "Notice"}</div>
+            {(notice.body || notice.text) && (
+              <div className="text-sm text-white/80 line-clamp-3 mt-1">{notice.body || notice.text}</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Multiple notices or no image — card list layout
     return (
-      <div className="w-full h-full bg-[linear-gradient(180deg,#111827,#0F172A)] p-5 text-white flex flex-col justify-between overflow-hidden">
+      <div className="w-full h-full bg-[linear-gradient(180deg,#111827,#0F172A)] p-5 text-white flex flex-col gap-3 overflow-hidden">
         <div>
           <div className="text-[10px] uppercase tracking-[0.45em] text-white/45">{cur.title || "Notices"}</div>
-          <div className="mt-2 text-sm text-white/70">Announcements and updates</div>
+          <div className="mt-1 text-sm text-white/60">Announcements and updates</div>
         </div>
-        <div className="space-y-2 overflow-hidden">
+        <div className="flex flex-col gap-2 overflow-hidden flex-1">
           {notices.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-sm text-white/60">No notices yet.</div>
-          ) : notices.slice(0, 4).map((notice, index) => (
-            <div key={`${notice.title || notice.body || index}`} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <div className="font-semibold text-base truncate">{notice.title || "Notice"}</div>
-              <div className="text-sm text-white/70 line-clamp-2 mt-1">{notice.body || notice.text || ""}</div>
-            </div>
-          ))}
+          ) : notices.slice(0, 4).map((notice, index) => {
+            const imgSrc = resolveNoticeImg(notice.image_url);
+            return (
+              <div key={`${notice.title || notice.body || index}`} className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden flex items-stretch gap-0">
+                {imgSrc && (
+                  <img
+                    src={imgSrc}
+                    alt={notice.title || "Notice"}
+                    className="w-16 h-full object-cover flex-shrink-0 rounded-l-2xl"
+                  />
+                )}
+                <div className="px-4 py-3 flex flex-col justify-center min-w-0">
+                  <div className="font-semibold text-base truncate">{notice.title || "Notice"}</div>
+                  {(notice.body || notice.text) && (
+                    <div className="text-sm text-white/70 line-clamp-2 mt-0.5">{notice.body || notice.text}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -527,7 +587,7 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
   const youtubeId = getYoutubeId(cur?.url);
   const isYoutubeSource = Boolean(youtubeId) || String(cur.type || cur.kind || "").toLowerCase() === "youtube";
 
-  const content = 
+  const content =
     (cur.type === "text" || cur.kind === "text") ? (
       <div className="w-full h-full flex items-center justify-center bg-black p-6 text-center overflow-hidden">
         <div className="max-w-[90%] text-white font-display text-2xl font-bold leading-tight">{cur.content || cur.text}</div>
@@ -648,7 +708,7 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
 
   return (
     <ResponsiveZoneShell scale={zoneScaleBoosted}>
-      <div 
+      <div
         className="w-full h-full flex flex-col text-white"
         style={{
           background: 'linear-gradient(135deg, #ec4899, #fb7185, #f97316)',
@@ -656,7 +716,7 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
       >
         {/* Top Status Bar - Bold */}
         <div className="bg-white/15 py-4 text-center border-b-2 border-white/30">
-          <div 
+          <div
             className="text-white font-black uppercase tracking-[0.3em]"
             style={{ fontSize: 'clamp(13px, 2vw, 18px)', letterSpacing: '0.3em' }}
           >
@@ -667,17 +727,17 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
         {/* Main Content - Current Token */}
         <div className="flex-1 flex flex-col items-center justify-center px-6 py-8">
           {/* Currently Serving Label - Bold */}
-          <div 
+          <div
             className="text-white/90 font-bold uppercase tracking-[0.25em] mb-4 text-center"
             style={{ fontSize: 'clamp(13px, 1.8vw, 16px)', letterSpacing: '0.25em' }}
           >
             ⚡ CURRENTLY SERVING
           </div>
-          
+
           {/* Current Token Number - Extra Large & Bold */}
-          <div 
+          <div
             className="font-black text-center leading-none tracking-tighter"
-            style={{ 
+            style={{
               fontSize: 'clamp(100px, 22vw, 220px)',
               textShadow: '4px 4px 0 rgba(0,0,0,0.2)',
               fontWeight: 900
@@ -685,17 +745,17 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
           >
             {currentToken.token || "—"}
           </div>
-          
+
           {/* Current Token Name - Bold */}
-          <div 
+          <div
             className="font-extrabold text-center mt-6 px-4"
             style={{ fontSize: 'clamp(22px, 4vw, 38px)' }}
           >
             {currentToken.patient_name || currentToken.service_name || "GUEST"}
           </div>
-          
+
           {/* Current Token Service - Bold */}
-          <div 
+          <div
             className="text-white/80 font-semibold text-center mt-3 uppercase tracking-wide"
             style={{ fontSize: 'clamp(13px, 2vw, 16px)' }}
           >
@@ -708,24 +768,24 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
           <div className="border-t-2 border-white/30 bg-black/30">
             <div className="max-w-7xl mx-auto px-6 py-5">
               {/* Next Up Label - Bold */}
-              <div 
+              <div
                 className="text-white/70 font-bold uppercase tracking-[0.25em] mb-5 text-center"
                 style={{ fontSize: 'clamp(11px, 1.5vw, 14px)', letterSpacing: '0.25em' }}
               >
                 ⏩ NEXT IN QUEUE
               </div>
-              
+
               {/* Next Tokens Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {nextTokens.map((token, index) => (
-                  <div 
+                  <div
                     key={token.token || index}
                     className="bg-white/15 border-2 border-white/30 p-4"
                     style={{ backdropFilter: 'blur(10px)' }}
                   >
                     <div className="flex items-center gap-4">
                       {/* Token Number - Bold */}
-                      <div 
+                      <div
                         className="font-black text-white"
                         style={{ fontSize: 'clamp(28px, 5vw, 44px)' }}
                       >
@@ -735,13 +795,13 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
                       <div className="w-px h-10 bg-white/40" />
                       {/* Token Info */}
                       <div className="flex-1 min-w-0">
-                        <div 
+                        <div
                           className="font-bold truncate"
                           style={{ fontSize: 'clamp(16px, 2.5vw, 18px)' }}
                         >
                           {token.patient_name || token.service_name || "GUEST"}
                         </div>
-                        <div 
+                        <div
                           className="text-white/60 font-medium truncate text-xs uppercase tracking-wide mt-1"
                           style={{ fontSize: 'clamp(11px, 1.5vw, 12px)' }}
                         >
@@ -764,11 +824,11 @@ function QueueBoard({ deviceName, queuePreview, notices, zone, canvasWidth, canv
             </div>
           </div>
         )}
-        
+
         {/* Notice Banner - Bold */}
         {notices && notices.length > 0 && notices[0] && (
           <div className="bg-black/40 border-t-2 border-white/30 py-4 px-6 text-center">
-            <div 
+            <div
               className="text-white/90 font-bold"
               style={{ fontSize: 'clamp(13px, 2vw, 16px)' }}
             >
@@ -962,29 +1022,29 @@ function ResponsiveZoneShell({ scale = 1, className = "", children }) {
 function ModernSplashScreen({ onComplete }) {
   const [progress, setProgress] = useState(0);
   const [dots, setDots] = useState("");
-  
+
   useEffect(() => {
     // Animated dots for loading text
     const interval = setInterval(() => {
       setDots(prev => prev.length >= 3 ? "" : prev + ".");
     }, 500);
-    
+
     // Simulate loading progress
     const timer = setTimeout(() => {
       onComplete();
     }, 2500);
-    
+
     const progressInterval = setInterval(() => {
       setProgress(prev => Math.min(prev + 2, 100));
     }, 50);
-    
+
     return () => {
       clearInterval(interval);
       clearTimeout(timer);
       clearInterval(progressInterval);
     };
   }, [onComplete]);
-  
+
   return (
     <div className="fixed inset-0 z-[100] bg-gradient-to-br from-purple-900 via-pink-800 to-orange-700 flex items-center justify-center overflow-hidden">
       {/* Animated background elements */}
@@ -993,7 +1053,7 @@ function ModernSplashScreen({ onComplete }) {
         <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-white/10 rounded-full blur-3xl animate-pulse delay-1000" />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-white/5 rounded-full blur-3xl animate-ping" />
       </div>
-      
+
       {/* Main content */}
       <div className="relative z-10 text-center">
         {/* Logo animation */}
@@ -1005,20 +1065,20 @@ function ModernSplashScreen({ onComplete }) {
             SIGNAGE
           </div>
         </div>
-        
+
         {/* Loading bar */}
         <div className="w-64 md:w-96 h-1 bg-white/20 rounded-full overflow-hidden mb-4">
-          <div 
+          <div
             className="h-full bg-white rounded-full transition-all duration-100 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>
-        
+
         {/* Loading text */}
         <div className="text-white/60 text-xs uppercase tracking-wider">
           Loading{dots}
         </div>
-        
+
         {/* Feature tags */}
         <div className="flex flex-wrap justify-center gap-3 mt-8">
           <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full">
@@ -1045,18 +1105,18 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
-  
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!pairCode.trim()) {
       setError("Please enter a pairing code");
       return;
     }
-    
+
     setIsLoading(true);
     setIsConnecting(true);
     setError("");
-    
+
     // Simulate connection check
     setTimeout(() => {
       setIsLoading(false);
@@ -1068,18 +1128,18 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
     if (initialCode && initialCode !== pairCode) setPairCode(initialCode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCode]);
-  
+
   return (
     <div className="fixed inset-0 z-[100] bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center overflow-hidden">
       {/* Animated background */}
       <div className="absolute inset-0">
         <div className="absolute top-0 left-0 w-full h-full bg-[url('data:image/svg+xml,%3Csvg%20width%3D%2260%22%20height%3D%2260%22%20viewBox%3D%220%200%2060%2060%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cg%20fill%3D%22none%22%20fill-rule%3D%22evenodd%22%3E%3Cg%20fill%3D%22%239C92AC%22%20fill-opacity%3D%220.05%22%3E%3Cpath%20d%3D%22M36%2034v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6%2034v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6%204V0H4v4H0v2h4v4h2V6h4V4H6z%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E')] opacity-20" />
       </div>
-      
+
       {/* Floating orbs */}
       <div className="absolute top-20 left-10 w-64 h-64 bg-purple-500/20 rounded-full blur-3xl animate-pulse" />
       <div className="absolute bottom-20 right-10 w-64 h-64 bg-pink-500/20 rounded-full blur-3xl animate-pulse delay-1000" />
-      
+
       {/* Card */}
       <div className="relative z-10 w-full max-w-md mx-4">
         <div className="bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl p-8">
@@ -1089,7 +1149,7 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
             <div className="text-xs text-white/50 uppercase tracking-[0.3em]">Signage Player</div>
             <div className="h-px w-12 bg-gradient-to-r from-transparent via-white/30 to-transparent mx-auto mt-4" />
           </div>
-          
+
           {/* Title */}
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold text-white mb-2">Pair Your Device</h2>
@@ -1097,12 +1157,12 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
               Enter the pairing code from your client dashboard to start displaying content
             </p>
           </div>
-          
+
           {/* Form or generated-code display */}
           {initialCode ? (
             <div className="space-y-6">
               <div className="text-center">
-                <div className="text-6xl font-mono tracking-widest text-white font-bold">{String(initialCode).slice(0,6)}</div>
+                <div className="text-6xl font-mono tracking-widest text-white font-bold">{String(initialCode).slice(0, 6)}</div>
                 <p className="text-white/40 mt-3">Show this code in the client portal to pair the device.</p>
                 <div className="mt-6">
                   <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-2">
@@ -1150,9 +1210,8 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
               <button
                 type="submit"
                 disabled={isLoading}
-                className={`w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 ${
-                  isLoading ? "opacity-70 cursor-not-allowed" : ""
-                }`}>
+                className={`w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 ${isLoading ? "opacity-70 cursor-not-allowed" : ""
+                  }`}>
                 {isLoading ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1167,7 +1226,7 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
               </button>
             </form>
           )}
-          
+
           {/* Help text */}
           <div className="mt-6 text-center">
             <p className="text-white/30 text-xs">
@@ -1175,7 +1234,7 @@ function PairingScreen({ onPair, error: externalError, initialCode = "" }) {
             </p>
           </div>
         </div>
-        
+
         {/* Footer */}
         <div className="text-center mt-6">
           <p className="text-white/20 text-[10px] uppercase tracking-wider">
@@ -1202,11 +1261,11 @@ export default function SignagePlayer() {
       const key = 'device_fingerprint';
       let fp = window.localStorage.getItem(key);
       if (fp && String(fp).trim()) return fp;
-      fp = `web-${Date.now()}-${Math.floor(Math.random()*0x7fffffff)}`;
+      fp = `web-${Date.now()}-${Math.floor(Math.random() * 0x7fffffff)}`;
       window.localStorage.setItem(key, fp);
       return fp;
     } catch (e) {
-      return `web-${Date.now()}-${Math.floor(Math.random()*0x7fffffff)}`;
+      return `web-${Date.now()}-${Math.floor(Math.random() * 0x7fffffff)}`;
     }
   };
 
@@ -1244,7 +1303,7 @@ export default function SignagePlayer() {
       setShowPairing(true);
     }
   };
-  
+
   const [payload, setPayload] = useState(null);
   const [providerData, setProviderData] = useState(null);
   const [liveWeather, setLiveWeather] = useState(null);
@@ -1381,7 +1440,7 @@ export default function SignagePlayer() {
         keepalive: true,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device_fingerprint: fingerprint }),
-      }).catch(() => {});
+      }).catch(() => { });
     } catch {
       // ignore offline beacon failures
     }
@@ -1435,7 +1494,7 @@ export default function SignagePlayer() {
       const fp = getOrCreateFingerprint();
       const { data } = await axios.get(`${BASE}/api/public/player/${currentPairCode}`, { headers: { 'X-Device-Fingerprint': fp } });
       setPayload(data);
-      try { console.debug("player-payload", data); } catch (e) {}
+      try { console.debug("player-payload", data); } catch (e) { }
       setErr("");
       setPairingError("");
     } catch (e) {
@@ -1458,7 +1517,7 @@ export default function SignagePlayer() {
 
         const clearRetryTimer = () => {
           if (queueSocketRetryRef.current) {
-      const id = setInterval(poll, pollIntervalMs);
+            const id = setInterval(poll, pollIntervalMs);
             queueSocketRetryRef.current = null;
           }
         };
@@ -1504,7 +1563,7 @@ export default function SignagePlayer() {
                 } else {
                   console.debug('queue socket received (no sent_at)', { received_at: new Date().toISOString(), now: Date.now(), type: data.type });
                 }
-              } catch (e) {}
+              } catch (e) { }
               // If server provided an announcement, speak it immediately (de-duplicated by key)
               const announcement = data && data.announcement ? data.announcement : null;
               if (announcement && announcement.text) {
@@ -1697,7 +1756,7 @@ export default function SignagePlayer() {
   // Load preferences after pairing
   useEffect(() => {
     if (!currentPairCode || showPairing || showSplash) return;
-    
+
     try {
       const raw = window.localStorage.getItem(zonePrefsKey);
       if (!raw) return;
@@ -1707,7 +1766,7 @@ export default function SignagePlayer() {
       if (typeof parsed?.customPlacementEnabled === "boolean") setCustomPlacementEnabled(parsed.customPlacementEnabled);
       if (parsed?.zonePlacements && typeof parsed.zonePlacements === "object") setZonePlacements(parsed.zonePlacements);
       if (parsed?.zoneMediaModes && typeof parsed.zoneMediaModes === "object") setZoneMediaModes(parsed.zoneMediaModes);
-    } catch {}
+    } catch { }
   }, [zonePrefsKey, currentPairCode, showPairing, showSplash]);
 
   useEffect(() => {
@@ -1717,21 +1776,21 @@ export default function SignagePlayer() {
       if (!raw) return;
       const parsed = String(raw || "").toLowerCase();
       if (["auto", "landscape", "portrait"].includes(parsed)) setOrientationOverride(parsed);
-    } catch {}
+    } catch { }
   }, [orientationPrefsKey, currentPairCode, showPairing, showSplash]);
 
   useEffect(() => {
     if (!currentPairCode || showPairing || showSplash) return;
     try {
       window.localStorage.setItem(zonePrefsKey, JSON.stringify({ hiddenZoneIds, fillBlankSpaces, customPlacementEnabled, zonePlacements, zoneMediaModes }));
-    } catch {}
+    } catch { }
   }, [zonePrefsKey, hiddenZoneIds, fillBlankSpaces, customPlacementEnabled, zonePlacements, zoneMediaModes, currentPairCode, showPairing, showSplash]);
 
   useEffect(() => {
     if (!currentPairCode || showPairing || showSplash) return;
     try {
       window.localStorage.setItem(orientationPrefsKey, orientationOverride);
-    } catch {}
+    } catch { }
   }, [orientationOverride, orientationPrefsKey, currentPairCode, showPairing, showSplash]);
 
   // Fetch provider data
@@ -1830,11 +1889,11 @@ export default function SignagePlayer() {
         if (source?.notices && Array.isArray(source.notices)) {
           for (const n of source.notices) catalog.push({ type: "notice", id: n.id, name: normalize(n.title || n.body || ""), image: n.image_url || "", desc: n.body || n.title || "", meta: n });
         }
-      } catch (e) {}
+      } catch (e) { }
 
       const normTranscript = normalize(transcript);
       const productCatalog = catalog.filter((c) => c.type === "product");
-      
+
       try {
         const greetingRE = /\b(hello|hi|hey)\b/i;
         const isGreeting = greetingRE.test(normTranscript);
@@ -1847,7 +1906,7 @@ export default function SignagePlayer() {
               window.speechSynthesis.cancel();
               window.speechSynthesis.speak(u);
             }
-          } catch (e) {}
+          } catch (e) { }
           const start = genericProductCursorRef.current % productCatalog.length;
           const count = Math.min(5, productCatalog.length);
           const items = new Array(count).fill(0).map((_, i) => {
@@ -1862,8 +1921,8 @@ export default function SignagePlayer() {
           overlayTimer.current = setTimeout(() => { overlayKeyRef.current = ""; setOverlay(null); }, 30_000);
           return;
         }
-      } catch (e) {}
-      
+      } catch (e) { }
+
       const queryTerms = normTranscript
         .split(/\s+/)
         .map((w) => w.trim())
@@ -1960,7 +2019,7 @@ export default function SignagePlayer() {
           wantsCollection,
           matchFound: !!match,
         });
-      } catch (e) {}
+      } catch (e) { }
 
       const genericProductRequest = /\b(product|products|item|items|catalog|collection)\b/.test(normTranscript) && /\b(show|any|next|another|browse)\b/.test(normTranscript);
 
@@ -2041,11 +2100,11 @@ export default function SignagePlayer() {
                 window.speechSynthesis.cancel();
                 window.speechSynthesis.speak(u);
                 window[spokenKey] = true;
-                setTimeout(() => { try { window[spokenKey] = false; } catch (e) {} }, 31000);
+                setTimeout(() => { try { window[spokenKey] = false; } catch (e) { } }, 31000);
               }
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     };
 
@@ -2062,7 +2121,7 @@ export default function SignagePlayer() {
           window.speechSynthesis.speak(utter);
           voiceGreetingPlayedRef.current = true;
         }
-      } catch (e) {}
+      } catch (e) { }
     };
     recognition.onerror = (event) => {
       setVoiceState("error");
@@ -2083,7 +2142,7 @@ export default function SignagePlayer() {
     }
 
     return () => {
-      try { recognition.onend = null; recognition.onstart = null; recognition.onerror = null; recognition.stop(); } catch (e) {}
+      try { recognition.onend = null; recognition.onstart = null; recognition.onerror = null; recognition.stop(); } catch (e) { }
     };
   }, [ENABLE_VOICE, payload, providerData, currentPairCode, showPairing, showSplash]);
 
@@ -2222,7 +2281,7 @@ export default function SignagePlayer() {
   if (showSplash) {
     return <ModernSplashScreen onComplete={() => setShowSplash(false)} />;
   }
-  
+
   // Show pairing screen if no pair code
   if (showPairing) {
     return <PairingScreen onPair={handlePair} error={pairingError} initialCode={generatedPairCode} />;
