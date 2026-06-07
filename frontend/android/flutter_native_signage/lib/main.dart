@@ -5284,6 +5284,12 @@ class _MediaSlotState extends State<MediaSlot> {
     return Container(color: Colors.black);
   }
 
+  String _normalizedApiBase() {
+    final trimmed = "https://rpsignage.com";
+    final fallback = trimmed.isEmpty ? 'https://rpsignage.com' : trimmed;
+    final withoutSlash = fallback.replaceAll(RegExp(r'/$'), '');
+    return withoutSlash.replaceAll(RegExp(r'/api$'), '');
+  }
   String _resolveUrl(Map<String, dynamic> item) {
     final candidate = item['url']?.toString() ??
         item['image_url']?.toString() ??

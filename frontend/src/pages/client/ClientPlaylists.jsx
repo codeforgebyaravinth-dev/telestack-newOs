@@ -445,7 +445,7 @@ export default function ClientPlaylists() {
         zone_items: form.zone_items,
         ticker_messages: form.ticker_messages || [],
       };
-        console.log("🔵 SUBMIT - payload.ticker_messages:", payload.ticker_messages);s
+        console.log("🔵 SUBMIT - payload.ticker_messages:", payload.ticker_messages);
       if (editing) await api.put(`/client/playlists/${editing.id}`, payload);
       else await api.post("/client/playlists", payload);
       toast.success(editing ? "Playlist updated" : "Playlist created");
