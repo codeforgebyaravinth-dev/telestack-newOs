@@ -493,85 +493,70 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
     );
   }
 
-  if (itemType === "notices") {
-    const notices = Array.isArray(cur.notices) ? cur.notices : Array.isArray(cur.items) ? cur.items : [];
+ if (itemType === "notices") {
+  const notices = Array.isArray(cur.notices) ? cur.notices : Array.isArray(cur.items) ? cur.items : [];
 
-    const resolveNoticeImg = (url) => {
-      if (!url) return "";
-      if (/^data:/i.test(url)) return url;
-
-      // If the backend stored an absolute URL pointing to the frontend dev server, 
-      // extract the path and route it to the actual API BASE.
-      if (url.includes("/api/media/serve/")) {
-        const pathMatch = url.match(/(\/api\/media\/serve\/.*)$/);
-        if (pathMatch) {
-          return `${BASE}${pathMatch[1]}`;
-        }
-      }
-
-      if (/^https?:\/\//i.test(url)) return url;
-      return `${BASE}${url.startsWith("/") ? "" : "/"}${url}`;
-    };
-
-    // If there is exactly one notice with an image, use a full-bleed hero layout
-    if (notices.length === 1 && notices[0]?.image_url) {
-      const notice = notices[0];
-      const imgSrc = resolveNoticeImg(notice.image_url);
-      return (
-        <div className="w-full h-full relative overflow-hidden text-white">
-          <img
-            src={imgSrc}
-            alt={notice.title || "Notice"}
-            className="absolute inset-0 w-full h-full object-cover"
-          />
-          {/* Dark gradient overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/10" />
-          {/* Text overlay */}
-          <div className="absolute bottom-0 left-0 right-0 p-5">
-            <div className="text-[10px] uppercase tracking-[0.45em] text-white/50 mb-1">{cur.title || "Notice"}</div>
-            <div className="font-bold text-xl leading-tight">{notice.title || "Notice"}</div>
-            {(notice.body || notice.text) && (
-              <div className="text-sm text-white/80 line-clamp-3 mt-1">{notice.body || notice.text}</div>
-            )}
-          </div>
-        </div>
-      );
+  const resolveNoticeImg = (url) => {
+    if (!url) return "";
+    if (/^data:/i.test(url)) return url;
+    if (url.includes("/api/media/serve/")) {
+      const pathMatch = url.match(/(\/api\/media\/serve\/.*)$/);
+      if (pathMatch) return `${BASE}${pathMatch[1]}`;
     }
+    if (/^https?:\/\//i.test(url)) return url;
+    return `${BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+  };
 
-    // Multiple notices or no image — card list layout
-    return (
-      <div className="w-full h-full bg-[linear-gradient(180deg,#111827,#0F172A)] p-5 text-white flex flex-col gap-3 overflow-hidden">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.45em] text-white/45">{cur.title || "Notices"}</div>
-          <div className="mt-1 text-sm text-white/60">Announcements and updates</div>
-        </div>
-        <div className="flex flex-col gap-2 overflow-hidden flex-1">
-          {notices.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-sm text-white/60">No notices yet.</div>
-          ) : notices.slice(0, 4).map((notice, index) => {
+  return (
+    <div className="w-full h-full bg-black text-white overflow-hidden flex flex-col">
+      {/* Table header */}
+      
+      
+      {/* Table rows */}
+      <div className="flex-1 overflow-y-auto">
+        {notices.length === 0 ? (
+          <div className="text-sm text-white/40 p-4">No notices yet.</div>
+        ) : (
+          notices.slice(0, 10).map((notice, index) => {
             const imgSrc = resolveNoticeImg(notice.image_url);
             return (
-              <div key={`${notice.title || notice.body || index}`} className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden flex items-stretch gap-0">
-                {imgSrc && (
-                  <img
-                    src={imgSrc}
-                    alt={notice.title || "Notice"}
-                    className="w-16 h-full object-cover flex-shrink-0 rounded-l-2xl"
-                  />
-                )}
-                <div className="px-4 py-3 flex flex-col justify-center min-w-0">
-                  <div className="font-semibold text-base truncate">{notice.title || "Notice"}</div>
+              <div 
+                key={index} 
+                className="flex items-center border-b border-white/10 px-4 py-3 hover:bg-white/5"
+              >
+                {/* Image column */}
+                <div className="w-16 h-12 flex-shrink-0 mr-3">
+                  {imgSrc ? (
+                    <img 
+                      src={imgSrc} 
+                      alt={notice.title || "Notice"} 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-white/10 flex items-center justify-center text-[10px] text-white/30">
+                      No img
+                    </div>
+                  )}
+                </div>
+                {/* Text column */}
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm text-white truncate">
+                    {notice.title || "Notice"}
+                  </div>
                   {(notice.body || notice.text) && (
-                    <div className="text-sm text-white/70 line-clamp-2 mt-0.5">{notice.body || notice.text}</div>
+                    <div className="text-xs text-white/60 truncate mt-0.5">
+                      {notice.body || notice.text}
+                    </div>
                   )}
                 </div>
               </div>
             );
-          })}
-        </div>
+          })
+        )}
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   const resolveSrc = (it) => {
     const candidate = it?.url || it?.image_url || it?.public_url || it?.media_url || (it?.media_id ? `/api/media/${it.media_id}` : "");

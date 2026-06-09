@@ -51,7 +51,7 @@ export default function Login() {
             <div className="w-9 h-9 bg-white text-[#111827] flex items-center justify-center rounded-sm">
               <FileVideo className="w-5 h-5" />
             </div>
-            <div className="font-display font-extrabold text-xl tracking-tight">SIGNAGE OS</div>
+            <div className="font-display font-extrabold text-xl tracking-tight">RP SIGNAGE </div>
           </div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.25em] text-white/60 mb-4">
             B2B / Control Panel · v1.0
@@ -123,19 +123,7 @@ export default function Login() {
             {busy ? "Signing in..." : "Sign in →"}
           </Button>
 
-          <div className="mt-6 pt-6 border-t border-[#E5E7EB]">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-3">Demo accounts</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => seed("admin")} data-testid="seed-admin"
-                className="flex items-center gap-2 px-3 py-2 border border-[#E5E7EB] rounded-sm text-xs hover:bg-[#F3F4F6] transition-colors">
-                <ShieldCheck className="w-3.5 h-3.5" /> Admin
-              </button>
-              <button type="button" onClick={() => seed("dealer")} data-testid="seed-dealer"
-                className="flex items-center gap-2 px-3 py-2 border border-[#E5E7EB] rounded-sm text-xs hover:bg-[#F3F4F6] transition-colors">
-                <FileVideo className="w-3.5 h-3.5" /> Dealer
-              </button>
-            </div>
-          </div>
+          
         </form>
       </div>
     </div>

@@ -25,6 +25,7 @@ import ClientPlaylists from "./pages/client/ClientPlaylists";
 import ClientSchedules from "./pages/client/ClientSchedules";
 import ClientPayments from "./pages/client/ClientPayments";
 import PublicBooking from "./pages/PublicBooking";
+import Home from "./pages/Home";
 // Use the new SignagePlayer implementation in its own folder (includes pairing UI)
 import SignagePlayer from "./pages/SignagePlayer/SignagePlayer";
 
@@ -57,16 +58,23 @@ function ProtectedRoute({ role, children }) {
   return children;
 }
 
-function Root() {
+function HomeRoute() {
   const { user, loading } = useAuth();
   if (isNativePlayerShell()) {
     return <Navigate to="/play" replace />;
-    
   }
-  if (loading || user === null) return null;
-  if (user === false) return <Navigate to="/login" replace />;
-  const home = user.role === "admin" ? "/admin" : user.role === "dealer" ? "/dealer" : "/client";
-  return <Navigate to={home} replace />;
+  if (loading || user === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#070B16]">
+        <div className="text-sm text-gray-400 font-mono uppercase tracking-widest animate-pulse">Loading...</div>
+      </div>
+    );
+  }
+  if (user && user !== false) {
+    const dashboard = user.role === "admin" ? "/admin" : user.role === "dealer" ? "/dealer" : "/client";
+    return <Navigate to={dashboard} replace />;
+  }
+  return <Home />;
 }
 
 export default function App() {
@@ -84,7 +92,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Root />} />
+          <Route path="/" element={<HomeRoute />} />
           <Route path="/login" element={<Login />} />
           <Route path="/book/:clientId" element={<PublicBooking />} />
           <Route path="/play/:pairCode" element={<SignagePlayer />} />
