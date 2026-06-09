@@ -20,6 +20,14 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
+const double kWeatherClockScaleMin = 0.3;
+const double kWeatherClockScaleMax = 1.5;
+const double kWeatherClockScaleDefault = 0.7;
+const int kNoticeSlideSecondsDefault = 5;
+
+double clampWeatherClockScale(double value) =>
+    value.clamp(kWeatherClockScaleMin, kWeatherClockScaleMax);
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -339,11 +347,14 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
   Map<String, String> zoneMediaModes = {};
   String orientationOverride = 'auto';
   double? brightnessOverridePercent;
-  double weatherClockScale = 1.0;
+  double weatherClockScale = kWeatherClockScaleDefault;
   String weatherClockTextColorKey = 'white';
   double tickerSpeed = 50.0;
   String tickerTextColorKey = 'white';
   String tickerBackgroundColorKey = 'black';
+  String noticeTitleColorKey = 'white';
+  String noticeBodyColorKey = 'white';
+  int noticeSlideSeconds = kNoticeSlideSecondsDefault;
   bool menuOpen = false;
   bool menuButtonVisible = false;
   bool kioskModeEnabled = true;
@@ -1189,7 +1200,7 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
           }
           if (data['weatherClockScale'] is num) {
             weatherClockScale =
-                (data['weatherClockScale'] as num).toDouble().clamp(0.7, 1.5);
+                clampWeatherClockScale((data['weatherClockScale'] as num).toDouble());
           }
           if (data['weatherClockTextColorKey'] is String) {
             final key = data['weatherClockTextColorKey'] as String;
@@ -1210,6 +1221,24 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
             final key = data['tickerBackgroundColorKey'] as String;
             if (key == 'black' || key == 'navy' || key == 'transparent') {
               tickerBackgroundColorKey = key;
+            }
+          }
+          if (data['noticeTitleColorKey'] is String) {
+            final key = data['noticeTitleColorKey'] as String;
+            if (_themeColors.containsKey(key)) {
+              noticeTitleColorKey = key;
+            }
+          }
+          if (data['noticeBodyColorKey'] is String) {
+            final key = data['noticeBodyColorKey'] as String;
+            if (_themeColors.containsKey(key)) {
+              noticeBodyColorKey = key;
+            }
+          }
+          if (data['noticeSlideSeconds'] is num) {
+            final seconds = (data['noticeSlideSeconds'] as num).toInt();
+            if (seconds == 4 || seconds == 5) {
+              noticeSlideSeconds = seconds;
             }
           }
         });
@@ -1240,6 +1269,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
       'tickerSpeed': tickerSpeed,
       'tickerTextColorKey': tickerTextColorKey,
       'tickerBackgroundColorKey': tickerBackgroundColorKey,
+      'noticeTitleColorKey': noticeTitleColorKey,
+      'noticeBodyColorKey': noticeBodyColorKey,
+      'noticeSlideSeconds': noticeSlideSeconds,
     }));
 
     final orientationKey = 'signage-player-orientation:$currentPairCode';
@@ -1418,7 +1450,7 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
 
   void _setWeatherClockScale(double value) {
     setState(() {
-      weatherClockScale = value.clamp(0.7, 1.5);
+      weatherClockScale = clampWeatherClockScale(value);
     });
     _saveZonePreferences();
   }
@@ -1450,6 +1482,30 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
     if (!(key == 'black' || key == 'navy' || key == 'transparent')) return;
     setState(() {
       tickerBackgroundColorKey = key;
+    });
+    _saveZonePreferences();
+  }
+
+  void _setNoticeTitleColor(String key) {
+    if (!_themeColors.containsKey(key)) return;
+    setState(() {
+      noticeTitleColorKey = key;
+    });
+    _saveZonePreferences();
+  }
+
+  void _setNoticeBodyColor(String key) {
+    if (!_themeColors.containsKey(key)) return;
+    setState(() {
+      noticeBodyColorKey = key;
+    });
+    _saveZonePreferences();
+  }
+
+  void _setNoticeSlideSeconds(int seconds) {
+    if (seconds != 4 && seconds != 5) return;
+    setState(() {
+      noticeSlideSeconds = seconds;
     });
     _saveZonePreferences();
   }
@@ -2310,6 +2366,9 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
       notices: notices,
       weatherClockScale: weatherClockScale,
       weatherClockTextColor: _themeColors[weatherClockTextColorKey] ?? Colors.white,
+      noticeTitleColor: _themeColors[noticeTitleColorKey] ?? Colors.white,
+      noticeBodyColor: _themeColors[noticeBodyColorKey] ?? Colors.white,
+      noticeSlideSeconds: noticeSlideSeconds,
     );
   }
 
@@ -2781,6 +2840,99 @@ class _SignagePlayerState extends State<SignagePlayer> with WidgetsBindingObserv
                                         color: entry.value,
                                         label: entry.key.toUpperCase(),
                                         onTap: () => _setWeatherClockTextColor(entry.key),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'NOTICES',
+                              style: TextStyle(
+                                fontSize: 10,
+                                letterSpacing: 3,
+                                color: Colors.white38,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white10),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Carousel slide every ${noticeSlideSeconds}s',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _buildPresetChoice(
+                                        label: '4 sec',
+                                        selected: noticeSlideSeconds == 4,
+                                        onTap: () => _setNoticeSlideSeconds(4),
+                                        icon: Icons.timer_outlined,
+                                      ),
+                                      _buildPresetChoice(
+                                        label: '5 sec',
+                                        selected: noticeSlideSeconds == 5,
+                                        onTap: () => _setNoticeSlideSeconds(5),
+                                        icon: Icons.timer_outlined,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Title color',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.7),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: _themeColors.entries.map((entry) {
+                                      final selected = noticeTitleColorKey == entry.key;
+                                      return _buildColorChoice(
+                                        selected: selected,
+                                        color: entry.value,
+                                        label: entry.key.toUpperCase(),
+                                        onTap: () => _setNoticeTitleColor(entry.key),
+                                      );
+                                    }).toList(),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Content color',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.7),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: _themeColors.entries.map((entry) {
+                                      final selected = noticeBodyColorKey == entry.key;
+                                      return _buildColorChoice(
+                                        selected: selected,
+                                        color: entry.value,
+                                        label: entry.key.toUpperCase(),
+                                        onTap: () => _setNoticeBodyColor(entry.key),
                                       );
                                     }).toList(),
                                   ),
@@ -3791,6 +3943,264 @@ class GridPatternPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+class NoticeCarousel extends StatefulWidget {
+  final List<dynamic> notices;
+  final Duration slideDuration;
+  final String Function(dynamic url) resolveImageUrl;
+  final Color titleColor;
+  final Color bodyColor;
+
+  const NoticeCarousel({
+    super.key,
+    required this.notices,
+    required this.slideDuration,
+    required this.resolveImageUrl,
+    this.titleColor = Colors.white,
+    this.bodyColor = Colors.white,
+  });
+
+  @override
+  State<NoticeCarousel> createState() => _NoticeCarouselState();
+}
+
+class _NoticeCarouselState extends State<NoticeCarousel> {
+  late final PageController _pageController;
+  Timer? _autoTimer;
+  int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    _scheduleAutoAdvance();
+  }
+
+  @override
+  void didUpdateWidget(covariant NoticeCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.notices.length != widget.notices.length ||
+        oldWidget.slideDuration != widget.slideDuration ||
+        oldWidget.titleColor != widget.titleColor ||
+        oldWidget.bodyColor != widget.bodyColor) {
+      _currentPage = 0;
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(0);
+      }
+      _scheduleAutoAdvance();
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleAutoAdvance() {
+    _autoTimer?.cancel();
+    if (widget.notices.length <= 1) return;
+    _autoTimer = Timer(widget.slideDuration, _goToNextPage);
+  }
+
+  void _goToNextPage() {
+    if (!mounted || widget.notices.length <= 1) return;
+    final next = (_currentPage + 1) % widget.notices.length;
+    if (!_pageController.hasClients) return;
+    _pageController.animateToPage(
+      next,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  void _onPageChanged(int page) {
+    setState(() => _currentPage = page);
+    _scheduleAutoAdvance();
+  }
+
+  Widget _buildTextBlock({
+    required String title,
+    required String bodyText,
+    required TextAlign align,
+    bool scrollBody = false,
+  }) {
+    final titleStyle = TextStyle(
+      fontSize: 22,
+      fontWeight: FontWeight.w700,
+      color: widget.titleColor,
+      height: 1.2,
+    );
+    final bodyStyle = TextStyle(
+      fontSize: 15,
+      height: 1.45,
+      color: widget.bodyColor,
+    );
+
+    if (scrollBody && bodyText.isNotEmpty) {
+      return Column(
+        crossAxisAlignment:
+            align == TextAlign.center ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: align,
+            style: titleStyle,
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Text(
+                bodyText,
+                textAlign: align,
+                style: bodyStyle,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment:
+          align == TextAlign.center ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: titleStyle,
+        ),
+        if (bodyText.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text(
+            bodyText,
+            maxLines: 6,
+            overflow: TextOverflow.ellipsis,
+            textAlign: align,
+            style: bodyStyle,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNoticeCard(Map<String, dynamic> notice) {
+    final imgSrc = widget.resolveImageUrl(notice['image_url']);
+    final bodyText = notice['body']?.toString() ?? notice['text']?.toString() ?? '';
+    final title = notice['title']?.toString() ?? 'Notice';
+
+    if (imgSrc.isEmpty) {
+      return ColoredBox(
+        color: Colors.black,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: _buildTextBlock(
+              title: title,
+              bodyText: bodyText,
+              align: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.black,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 5,
+            child: CachedImageWidget(url: imgSrc, fit: BoxFit.cover),
+          ),
+          Expanded(
+            flex: 4,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              child: _buildTextBlock(
+                title: title,
+                bodyText: bodyText,
+                align: TextAlign.start,
+                scrollBody: true,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.notices.isEmpty) {
+      return ColoredBox(
+        color: Colors.black,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'No notices yet.',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.white.withOpacity(0.4),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final showDots = widget.notices.length > 1;
+
+    return ColoredBox(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.notices.length,
+            onPageChanged: _onPageChanged,
+            itemBuilder: (context, index) {
+              final notice = widget.notices[index] as Map<String, dynamic>;
+              return _buildNoticeCard(notice);
+            },
+          ),
+          if (showDots)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 10,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(widget.notices.length, (index) {
+                  final active = index == _currentPage;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    width: active ? 16 : 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: active
+                          ? Colors.white.withOpacity(0.9)
+                          : Colors.white.withOpacity(0.28),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  );
+                }),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 // Media Slot Widget (scrollable version to prevent overflow)
 class MediaSlot extends StatefulWidget {
   final List<Map<String, dynamic>> items;
@@ -3802,6 +4212,9 @@ class MediaSlot extends StatefulWidget {
   final List<dynamic> notices;
   final double weatherClockScale;
   final Color weatherClockTextColor;
+  final Color noticeTitleColor;
+  final Color noticeBodyColor;
+  final int noticeSlideSeconds;
 
   const MediaSlot({
     super.key,
@@ -3812,8 +4225,11 @@ class MediaSlot extends StatefulWidget {
     this.todayBookingsPreview = const [],
     this.liveQueue = const [],
     this.notices = const [],
-    this.weatherClockScale = 1.0,
+    this.weatherClockScale = kWeatherClockScaleDefault,
     this.weatherClockTextColor = Colors.white,
+    this.noticeTitleColor = Colors.white,
+    this.noticeBodyColor = Colors.white,
+    this.noticeSlideSeconds = kNoticeSlideSecondsDefault,
   });
 
   static _MediaSlotState? _activeAudioState;
@@ -3926,9 +4342,22 @@ class _MediaSlotState extends State<MediaSlot> {
     final duration = (item['duration'] ?? 10).toInt();
     final itemType = _resolveItemType(item);
 
+    if (itemType == 'notices') {
+      final noticeCount = _noticesForItem(item).length.clamp(1, 10);
+      final slideSeconds = widget.noticeSlideSeconds.clamp(4, 5);
+      timer = Timer(Duration(seconds: slideSeconds * noticeCount), _nextItem);
+      return;
+    }
+
     if (itemType != 'video' && itemType != 'youtube') {
       timer = Timer(Duration(seconds: duration), _nextItem);
     }
+  }
+
+  List<dynamic> _noticesForItem(Map<String, dynamic> item) {
+    if (item['notices'] is List) return item['notices'] as List<dynamic>;
+    if (item['items'] is List) return item['items'] as List<dynamic>;
+    return widget.notices;
   }
 
   String _resolveItemType(Map<String, dynamic> item) {
@@ -4009,7 +4438,7 @@ class _MediaSlotState extends State<MediaSlot> {
     setState(() {
       showPlaybackControls = true;
     });
-    controlsHideTimer = Timer(const Duration(seconds: 4), () {
+    controlsHideTimer = Timer(const Duration(seconds: 1), () {
       if (!mounted) return;
       setState(() {
         showPlaybackControls = false;
@@ -4339,7 +4768,7 @@ class _MediaSlotState extends State<MediaSlot> {
   }
 
   Widget _buildClock(Map<String, dynamic> item) {
-    final scaleFactor = widget.weatherClockScale.clamp(0.7, 1.5);
+    final scaleFactor = clampWeatherClockScale(widget.weatherClockScale);
     final textColor = widget.weatherClockTextColor;
 
     return StreamBuilder(
@@ -4475,7 +4904,7 @@ class _MediaSlotState extends State<MediaSlot> {
   }
 
   Widget _buildWeather(Map<String, dynamic> item) {
-    final scaleFactor = widget.weatherClockScale.clamp(0.7, 1.5);
+    final scaleFactor = clampWeatherClockScale(widget.weatherClockScale);
     final textColor = widget.weatherClockTextColor;
 
     final temp = item['temperature']?.toString() ?? '--';
@@ -4635,7 +5064,7 @@ class _MediaSlotState extends State<MediaSlot> {
             item['content']?.toString() ?? item['text']?.toString() ?? '',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 24 * widget.weatherClockScale.clamp(0.7, 1.5),
+              fontSize: 24 * clampWeatherClockScale(widget.weatherClockScale),
               fontWeight: FontWeight.bold,
               color: textColor,
             ),
@@ -4658,8 +5087,9 @@ class _MediaSlotState extends State<MediaSlot> {
           autoPlay: true,
           mute: isMuted,
           hideControls: true,
-          controlsVisibleAtStart: true,
-          disableDragSeek: false,
+          controlsVisibleAtStart: false,
+          disableDragSeek: true,
+          enableCaption: false,
         ),
       );
       MediaSlot._claimAudioFocus(this);
@@ -4672,10 +5102,16 @@ class _MediaSlotState extends State<MediaSlot> {
             youtubeController?.seekTo(Duration.zero);
             youtubeController?.play();
           });
+        } else if (state == PlayerState.cued || state == PlayerState.paused) {
+          if (!youtubeController!.value.isPlaying) {
+            youtubeController!.play();
+          }
+          _youtubeCompletionHandled = false;
         } else if (state != PlayerState.ended) {
           _youtubeCompletionHandled = false;
         }
       });
+      youtubeController!.play();
     }
   }
 
@@ -4735,11 +5171,11 @@ class _MediaSlotState extends State<MediaSlot> {
 
     return YoutubePlayer(
       controller: youtubeController!,
-      showVideoProgressIndicator: true,
-      progressIndicatorColor: Colors.redAccent,
+      showVideoProgressIndicator: false,
       onReady: () {
         youtubeController?.play();
-        _showPlaybackControlsTemporarily();
+        setState(() => showPlaybackControls = false);
+        controlsHideTimer?.cancel();
       },
     );
   }
@@ -5090,186 +5526,24 @@ class _MediaSlotState extends State<MediaSlot> {
     );
   }
 
+  String _resolveNoticeImg(dynamic url) {
+    if (url == null) return '';
+    final value = url.toString().trim();
+    if (value.isEmpty) return '';
+    if (value.startsWith('data:')) return value;
+    return _resolveUrl({'url': value});
+  }
+
   Widget _buildNotices(Map<String, dynamic> item) {
-    final notices = (item['items'] as List<dynamic>?) ??
-        (item['notices'] as List<dynamic>?) ??
-        widget.notices;
+    final rawNotices = _noticesForItem(item).take(10).toList();
+    final slideSeconds = widget.noticeSlideSeconds.clamp(4, 5);
 
-    // HERO LAYOUT
-    if (notices.length == 1 &&
-        (notices.first as Map)['image_url'] != null &&
-        (notices.first as Map)['image_url'].toString().isNotEmpty) {
-      final notice = notices.first as Map<String, dynamic>;
-      final imgSrc = _resolveUrl({'url': notice['image_url']});
-      return SizedBox.expand(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CachedImageWidget(url: imgSrc, fit: BoxFit.cover),
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.black.withOpacity(0.1), Colors.black.withOpacity(0.4), Colors.black.withOpacity(0.9)],
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    (item['title'] ?? 'Notice').toString().toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 10,
-                      letterSpacing: 4.5,
-                      color: Colors.white.withOpacity(0.5),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    notice['title']?.toString() ?? 'Notice',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  if (notice['body'] != null || notice['text'] != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      notice['body']?.toString() ?? notice['text']?.toString() ?? '',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white.withOpacity(0.8),
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      width: double.infinity,
-      height: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF111827), Color(0xFF0F172A)],
-        ),
-      ),
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            (item['title'] ?? 'Notices').toString().toUpperCase(),
-            style: TextStyle(
-              fontSize: 10,
-              letterSpacing: 4.5,
-              color: Colors.white.withOpacity(0.45),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Announcements and updates',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.white.withOpacity(0.7),
-            ),
-          ),
-          const SizedBox(height: 20),
-          Expanded(
-            child: notices.isEmpty
-                ? Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white.withOpacity(0.15)),
-                borderRadius: BorderRadius.circular(16),
-                color: Colors.white.withOpacity(0.05),
-              ),
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: Text(
-                  'No notices yet.',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.6),
-                  ),
-                ),
-              ),
-            )
-                : ListView.builder(
-              itemCount: notices.length.clamp(0, 4),
-              itemBuilder: (context, index) {
-                  final notice = notices[index] as Map<String, dynamic>;
-                  final hasImage = notice['image_url'] != null && notice['image_url'].toString().isNotEmpty;
-                  final imgSrc = hasImage ? _resolveUrl({'url': notice['image_url']}) : null;
-                  
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (imgSrc != null)
-                            SizedBox(
-                              width: 64,
-                              child: CachedImageWidget(url: imgSrc, fit: BoxFit.cover),
-                            ),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    notice['title']?.toString() ?? 'Notice',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    notice['body']?.toString() ??
-                                        notice['text']?.toString() ?? '',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(0.7),
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-          ),
-        ],
-      ),
+    return NoticeCarousel(
+      notices: rawNotices,
+      slideDuration: Duration(seconds: slideSeconds),
+      resolveImageUrl: _resolveNoticeImg,
+      titleColor: widget.noticeTitleColor,
+      bodyColor: widget.noticeBodyColor,
     );
   }
 
@@ -5719,7 +5993,7 @@ class AutoWidgetZone extends StatelessWidget {
     this.weatherData,
     required this.canvasWidth,
     required this.canvasHeight,
-    this.weatherScaleFactor = 1.0,
+    this.weatherScaleFactor = kWeatherClockScaleDefault,
     this.weatherClockTextColor = Colors.white,
   });
 
@@ -5731,8 +6005,8 @@ class AutoWidgetZone extends StatelessWidget {
       builder: (context, constraints) {
         final scale = max(0.38, min(1.0, min(constraints.maxWidth / 520, constraints.maxHeight / 320)));
         final child = switch (role) {
-          'header' => _buildHeader(scale * weatherScaleFactor.clamp(0.7, 1.5)),
-          'weather' => _buildWeather(scale * weatherScaleFactor.clamp(0.7, 1.5)),
+          'header' => _buildHeader(scale * clampWeatherClockScale(weatherScaleFactor)),
+          'weather' => _buildWeather(scale * clampWeatherClockScale(weatherScaleFactor)),
           'bookings' => _buildBookings(scale),
           _ => const SizedBox(),
         };
