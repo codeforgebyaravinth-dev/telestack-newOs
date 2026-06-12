@@ -32,18 +32,29 @@ export function PublicCustomerAuthProvider({ clientRef, resolvedHost, scope = "p
     refresh();
   }, [refresh]);
 
-  const login = async (email, password) => {
-    const { data } = await api.post("/auth/login", { email, password });
+  const login = async ({ email, phone, password }) => {
+    const payload = { password };
+    if (email) payload.email = email;
+    if (phone) payload.phone = phone;
+    const { data } = await api.post("/auth/login", payload);
     if (data.access_token) localStorage.setItem(tokenKey, data.access_token);
     setCustomer(data.shopper);
     return data.shopper;
   };
 
-  const signup = async (payload) => {
-    const { data } = await api.post("/auth/signup", payload);
+  const requestSignup = async (payload) => {
+    await api.post("/auth/signup", payload);
+  };
+
+  const verifySignup = async (email, code) => {
+    const { data } = await api.post("/auth/signup/verify", { email, code });
     if (data.access_token) localStorage.setItem(tokenKey, data.access_token);
     setCustomer(data.shopper);
     return data.shopper;
+  };
+
+  const resendSignupCode = async (email) => {
+    await api.post("/auth/signup/resend", { email });
   };
 
   const logout = async () => {
@@ -55,7 +66,9 @@ export function PublicCustomerAuthProvider({ clientRef, resolvedHost, scope = "p
   };
 
   return (
-    <PublicCustomerAuthContext.Provider value={{ customer, loading, login, signup, logout, api, clientRef, resolvedHost, refresh }}>
+    <PublicCustomerAuthContext.Provider value={{
+      customer, loading, login, requestSignup, verifySignup, resendSignupCode, logout, api, clientRef, resolvedHost, refresh,
+    }}>
       {children}
     </PublicCustomerAuthContext.Provider>
   );

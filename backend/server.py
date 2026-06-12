@@ -984,6 +984,8 @@ class OrderCreateIn(BaseModel):
     shipping_pincode: str = ""
     payment_method: Literal["cod", "upi"] = "cod"
     notes: str = ""
+    order_fulfillment: Literal["online", "offline"] = "online"
+    table_number: str = ""
 
 class OrderStatusIn(BaseModel):
     status: Literal["pending", "confirmed", "shipped", "delivered", "completed", "cancelled"]
@@ -1232,60 +1234,31 @@ def _shopper_verification_code() -> str:
 
 def _send_shopper_verification_email_sync(to_email: str, code: str, store_name: str) -> None:
     host = os.environ.get("SMTP_HOST", "").strip()
-    port_str = os.environ.get("SMTP_PORT", "465").strip()
+    port = int(os.environ.get("SMTP_PORT", "587") or "587")
     user = os.environ.get("SMTP_USER", "").strip()
     password = os.environ.get("SMTP_PASSWORD", "").strip()
     from_addr = os.environ.get("SMTP_FROM", user or "noreply@rpsignage.com").strip()
-    
     subject = f"Verify your email — {store_name or 'Store'}"
     body = (
         f"Your verification code is: {code}\n\n"
         f"Enter this code to complete signup at {store_name or 'the store'}.\n"
-        f"The code expires in 15 minutes.\n\n"
-        f"Thanks,\n{store_name or 'RP Signage'} Team"
+        f"The code expires in 15 minutes.\n"
     )
-    
     if not host:
         logger.warning("SMTP not configured; verification code for %s: %s", to_email, code)
         return
-    
-    # Parse port
-    try:
-        port = int(port_str)
-    except ValueError:
-        port = 587 if port_str == "587" else 465
-    
-    msg = MIMEText(body, "plain", "utf-8")
+    msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = from_addr
     msg["To"] = to_email
-    
-    # Check if we need SSL (port 465) or STARTTLS (other ports)
-    use_ssl = os.environ.get("SMTP_SSL", "").lower() in ("1", "true", "yes", "on") or port == 465
-    
-    try:
-        if use_ssl:
-            # SSL connection for port 465
-            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
-                smtp.ehlo()
-                if user and password:
-                    smtp.login(user, password)
-                smtp.sendmail(from_addr, [to_email], msg.as_string())
-        else:
-            # STARTTLS connection for ports 587, 25, etc.
-            with smtplib.SMTP(host, port, timeout=30) as smtp:
-                smtp.ehlo()
-                if os.environ.get("SMTP_TLS", "true").lower() not in ("0", "false", "no"):
-                    smtp.starttls()
-                    smtp.ehlo()
-                if user and password:
-                    smtp.login(user, password)
-                smtp.sendmail(from_addr, [to_email], msg.as_string())
-        
-        logger.info("Verification email sent to %s", to_email)
-    except Exception as e:
-        logger.error("Failed to send verification email to %s: %s", to_email, e)
-        # Don't raise - just log, the code is still displayed in logs as fallback
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.ehlo()
+        if os.environ.get("SMTP_TLS", "true").lower() not in ("0", "false", "no"):
+            smtp.starttls()
+            smtp.ehlo()
+        if user and password:
+            smtp.login(user, password)
+        smtp.sendmail(from_addr, [to_email], msg.as_string())
 
 
 async def _send_shopper_verification_email(to_email: str, code: str, store_name: str) -> None:
@@ -4108,6 +4081,28 @@ async def public_store_checkout(client_ref: str, body: OrderCreateIn, request: R
             "image_url": item.get("image_url") or "",
         })
     subtotal = round(subtotal, 2)
+    fulfillment = body.order_fulfillment or "online"
+    table_number = (body.table_number or "").strip()
+    if fulfillment == "offline":
+        if not table_number:
+            raise HTTPException(status_code=400, detail="Table number is required for in-store orders")
+        shipping_address = {
+            "name": body.shipping_name or shopper.get("name") or "",
+            "phone": body.shipping_phone or shopper.get("phone") or "",
+            "line1": "",
+            "city": "",
+            "pincode": "",
+        }
+    else:
+        if not (body.shipping_line1 or "").strip():
+            raise HTTPException(status_code=400, detail="Delivery address is required")
+        shipping_address = {
+            "name": body.shipping_name or shopper.get("name") or "",
+            "phone": body.shipping_phone or shopper.get("phone") or "",
+            "line1": body.shipping_line1,
+            "city": body.shipping_city,
+            "pincode": body.shipping_pincode,
+        }
     order = {
         "id": str(uuid.uuid4()),
         "order_no": await gen_order_no(cid),
@@ -4121,13 +4116,9 @@ async def public_store_checkout(client_ref: str, body: OrderCreateIn, request: R
         "subtotal": subtotal,
         "shipping_fee": 0.0,
         "total": subtotal,
-        "shipping_address": {
-            "name": body.shipping_name or shopper.get("name") or "",
-            "phone": body.shipping_phone or shopper.get("phone") or "",
-            "line1": body.shipping_line1,
-            "city": body.shipping_city,
-            "pincode": body.shipping_pincode,
-        },
+        "fulfillment_type": fulfillment,
+        "table_number": table_number if fulfillment == "offline" else "",
+        "shipping_address": shipping_address,
         "payment_method": body.payment_method,
         "payment_status": "pending",
         "notes": body.notes or "",

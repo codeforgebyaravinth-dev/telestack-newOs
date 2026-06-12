@@ -14,6 +14,7 @@ import { Plus, Pencil, Trash2, Stethoscope, Package, Building, Copy, Scissors, M
 import { Checkbox } from "../../components/ui/checkbox";
 import GeneralStorefrontPanel from "./GeneralStorefrontPanel";
 import { toast } from "sonner";
+import { formatOrderDelivery, orderDeliverySearchText, orderFulfillmentType } from "../../lib/orderFulfillment";
 
 function ServicePanel({ vertical, label, icon: Icon }) {
   const profileKey = `${vertical}_profile`;
@@ -714,6 +715,7 @@ function orderMatchesSearch(order, query) {
     order.shopper_name,
     order.shopper_email,
     order.shopper_phone,
+    orderDeliverySearchText(order),
   ].filter(Boolean).join(" ").toLowerCase();
   return hay.includes(query);
 }
@@ -1065,7 +1067,7 @@ function RetailerPanel() {
 
   return (
     <div>
-      <Tabs defaultValue="products" className="space-y-6">
+      <Tabs defaultValue="orders" className="space-y-6">
         <TabsList className="rounded-sm bg-[#F3F4F6] flex-wrap h-auto p-2 gap-2">
           <TabsTrigger value="products" className="rounded-sm data-[state=active]:bg-[#111827] data-[state=active]:text-white"><Package className="w-3.5 h-3.5 mr-1.5" /> Products</TabsTrigger>
           <TabsTrigger value="categories" className="rounded-sm data-[state=active]:bg-[#111827] data-[state=active]:text-white"><FolderTree className="w-3.5 h-3.5 mr-1.5" /> Categories</TabsTrigger>
@@ -1354,6 +1356,9 @@ function RetailerPanel() {
                           <div className="font-bold">{order.order_no}</div>
                           <div className="text-sm text-[#6B7280]">
                             {customerLabel} · {order.shopper_phone || "-"}
+                          </div>
+                          <div className="text-sm text-[#374151] mt-1">
+                            {orderFulfillmentType(order) === "offline" ? "Table" : "Address"}: {formatOrderDelivery(order)}
                           </div>
                           <div className="text-xs text-[#6B7280]">{order.created_at ? new Date(order.created_at).toLocaleString() : ""}</div>
                           {sameCustomerSelectableCount > 1 && (

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "../../components/ui/button";
 import { useShopperAuth } from "../../context/ShopperAuthContext";
+import { formatOrderDelivery, orderFulfillmentType } from "../../lib/orderFulfillment";
 import { storePath } from "../../lib/storeApi";
 
 const STATUS_COLORS = {
@@ -69,6 +70,9 @@ export default function StoreOrders() {
                   <span>₹{Number(item.line_total || 0).toLocaleString()}</span>
                 </div>
               ))}
+            </div>
+            <div className="text-sm text-[#565959] mt-2">
+              {orderFulfillmentType(order) === "offline" ? "Table" : "Address"}: {formatOrderDelivery(order)}
             </div>
             <div className="border-t border-[#EEE] mt-3 pt-3 flex justify-between font-bold">
               <span>Total</span>

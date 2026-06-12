@@ -12,11 +12,11 @@ import StoreOrders from "./StoreOrders";
 import StoreAuth from "./StoreAuth";
 import StoreProfile from "./StoreProfile";
 
-function StoreRoutes({ clientRef, resolvedHost, storeName }) {
+function StoreRoutes({ clientRef, resolvedHost, storeName, storeLogoUrl }) {
   return (
     <ShopperAuthProvider clientRef={clientRef} resolvedHost={resolvedHost}>
       <Routes>
-        <Route element={<StoreLayout storeName={storeName} clientRef={clientRef} resolvedHost={resolvedHost} />}>
+        <Route element={<StoreLayout storeName={storeName} storeLogoUrl={storeLogoUrl} clientRef={clientRef} resolvedHost={resolvedHost} />}>
           <Route index element={<StoreHome />} />
           <Route path="search" element={<StoreSearch />} />
           <Route path="product/:productId" element={<StoreProductDetail />} />
@@ -36,6 +36,7 @@ export default function PublicStore({ resolvedHost = null, clientRef: propClient
   const { clientRef: routeClientRef } = useParams();
   const [clientRef, setClientRef] = useState(propClientRef || routeClientRef || "");
   const [storeName, setStoreName] = useState("");
+  const [storeLogoUrl, setStoreLogoUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -63,6 +64,7 @@ export default function PublicStore({ resolvedHost = null, clientRef: propClient
         const apiBase = publicStoreBase(resolvedHost);
         const { data } = await axios.get(`${apiBase}/store/${encodeURIComponent(ref)}`);
         setStoreName(data.name || "");
+        setStoreLogoUrl(data.profile?.image_url || "");
       } catch {
         setError("Store not found or unavailable.");
       } finally {
@@ -89,5 +91,5 @@ export default function PublicStore({ resolvedHost = null, clientRef: propClient
     );
   }
 
-  return <StoreRoutes clientRef={clientRef} resolvedHost={resolvedHost} storeName={storeName} />;
+  return <StoreRoutes clientRef={clientRef} resolvedHost={resolvedHost} storeName={storeName} storeLogoUrl={storeLogoUrl} />;
 }

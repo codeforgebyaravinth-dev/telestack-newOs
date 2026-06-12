@@ -2,13 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, Navigate } from "react-router-dom";
 import axios from "axios";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Textarea } from "../components/ui/textarea";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { CircleSlash, ArrowLeft, ShoppingBag, Tag, Package } from "lucide-react";
 import { toast } from "sonner";
 import { formatErr, resolveMediaUrl } from "../lib/api";
+import PublicAuthDialog from "../components/PublicAuthDialog";
+import { usePublicPageBranding } from "../hooks/usePublicPageBranding";
 import {
   createPublicCustomerApi, customerTokenKey, loadActiveBookings, saveActiveBooking,
   removeActiveBooking, isActiveBookingStatus, publicApiBase, isCustomPublicHost,
@@ -66,56 +64,6 @@ function getTimeMinutesInZone(timeZone) {
 
 function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "");
-}
-
-function BookingAuthDialog({ open, onOpenChange, mode, setMode, onLogin, onSignup }) {
-  const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "", name: "", phone: "" });
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      if (mode === "signup") {
-        await onSignup(form);
-        toast.success("Account created");
-      } else {
-        await onLogin(form.email, form.password);
-        toast.success("Signed in");
-      }
-      onOpenChange(false);
-    } catch (err) {
-      toast.error(formatErr(err.response?.data?.detail));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="rounded-2xl max-w-md">
-        <DialogHeader>
-          <DialogTitle>{mode === "signup" ? "Create account" : "Sign in"}</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          {mode === "signup" && (
-            <>
-              <div><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-xl mt-1" /></div>
-              <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="rounded-xl mt-1" /></div>
-            </>
-          )}
-          <div><Label>Email</Label><Input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-xl mt-1" /></div>
-          <div><Label>Password</Label><Input type="password" required minLength={6} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-xl mt-1" /></div>
-          <DialogFooter className="flex-col sm:flex-col gap-2">
-            <Button type="submit" disabled={busy} className="w-full rounded-xl bg-[#111827] text-white">{busy ? "Please wait..." : mode === "signup" ? "Create account" : "Sign in"}</Button>
-            <button type="button" className="text-sm text-[#007185]" onClick={() => setMode(mode === "signup" ? "login" : "signup")}>
-              {mode === "signup" ? "Already have an account? Sign in" : "New here? Create account"}
-            </button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 export default function PublicBooking({ resolvedHost = null }) {
@@ -192,6 +140,8 @@ function PublicBookingInner({ resolvedHost = null }) {
   const isBookingVertical = doc?.vertical === "doctor" || doc?.vertical === "salon";
   const isCustomerVertical = isBookingVertical || doc?.vertical === "general";
 
+  usePublicPageBranding(doc?.name || "", doc?.profile?.image_url || "");
+
   useEffect(() => {
     if (!customerApi || !isCustomerVertical) return;
     const token = localStorage.getItem(customerTokenKey(authRef));
@@ -267,18 +217,29 @@ function PublicBookingInner({ resolvedHost = null }) {
     return () => clearInterval(timer);
   }, [clientId, branchId, apiBase, isBookingVertical]);
 
-  const handleCustomerLogin = async (email, password) => {
-    const { data } = await customerApi.post("/auth/login", { email, password });
+  const handleCustomerLogin = async ({ email, phone, password }) => {
+    const payload = { password };
+    if (email) payload.email = email;
+    if (phone) payload.phone = phone;
+    const { data } = await customerApi.post("/auth/login", payload);
     if (data.access_token) localStorage.setItem(customerTokenKey(authRef), data.access_token);
     setCustomer(data.shopper);
     return data.shopper;
   };
 
-  const handleCustomerSignup = async (payload) => {
-    const { data } = await customerApi.post("/auth/signup", payload);
+  const handleCustomerSignupRequest = async (payload) => {
+    await customerApi.post("/auth/signup", payload);
+  };
+
+  const handleCustomerSignupVerify = async (email, code) => {
+    const { data } = await customerApi.post("/auth/signup/verify", { email, code });
     if (data.access_token) localStorage.setItem(customerTokenKey(authRef), data.access_token);
     setCustomer(data.shopper);
     return data.shopper;
+  };
+
+  const handleCustomerSignupResend = async (email) => {
+    await customerApi.post("/auth/signup/resend", { email });
   };
 
   const handleCustomerLogout = async () => {
@@ -626,10 +587,22 @@ function PublicBookingInner({ resolvedHost = null }) {
     );
   }
 
+  const authDialog = (
+    <PublicAuthDialog
+      open={authOpen}
+      onOpenChange={setAuthOpen}
+      initialMode={authMode}
+      onLogin={handleCustomerLogin}
+      onRequestSignup={handleCustomerSignupRequest}
+      onVerifySignup={handleCustomerSignupVerify}
+      onResendSignupCode={handleCustomerSignupResend}
+    />
+  );
+
   if (doc.vertical === "general") {
     return (
       <>
-        <BookingAuthDialog open={authOpen} onOpenChange={setAuthOpen} mode={authMode} setMode={setAuthMode} onLogin={handleCustomerLogin} onSignup={handleCustomerSignup} />
+        {authDialog}
         <PublicGeneral
           doc={doc}
           clientId={clientId}
@@ -657,7 +630,7 @@ function PublicBookingInner({ resolvedHost = null }) {
 
   return (
     <>
-      <BookingAuthDialog open={authOpen} onOpenChange={setAuthOpen} mode={authMode} setMode={setAuthMode} onLogin={handleCustomerLogin} onSignup={handleCustomerSignup} />
+      {authDialog}
       <PublicSalonDoctor
         doc={doc}
         profile={profile}

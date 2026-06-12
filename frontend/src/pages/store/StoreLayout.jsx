@@ -3,13 +3,17 @@ import { Package, ShoppingBag, ShoppingCart } from "lucide-react";
 import { useEffect, useState } from "react";
 import PublicTopNav from "../../components/PublicTopNav";
 import { useShopperAuth } from "../../context/ShopperAuthContext";
+import { resolveMediaUrl } from "../../lib/api";
+import { usePublicPageBranding } from "../../hooks/usePublicPageBranding";
 import { storePath, storePublicUrl } from "../../lib/storeApi";
 import StoreSearchBox from "./StoreSearchBox";
 
-export default function StoreLayout({ storeName, clientRef, resolvedHost }) {
+export default function StoreLayout({ storeName, storeLogoUrl, clientRef, resolvedHost }) {
   const { shopper, logout, api } = useShopperAuth();
   const [cartCount, setCartCount] = useState(0);
   const [announcement, setAnnouncement] = useState("");
+
+  usePublicPageBranding(storeName, storeLogoUrl);
 
   useEffect(() => {
     (async () => {
@@ -56,7 +60,9 @@ export default function StoreLayout({ storeName, clientRef, resolvedHost }) {
         profileHref={shopper && shopper !== false ? profilePath : ""}
         loginHref={!shopper || shopper === false ? loginPath : ""}
         onLogout={logout}
-        brandIcon={(
+        brandIcon={storeLogoUrl ? (
+          <img src={resolveMediaUrl(storeLogoUrl)} alt="" className="w-9 h-9 rounded object-cover shrink-0 bg-white" />
+        ) : (
           <div className="w-9 h-9 bg-[#FF9900] rounded flex items-center justify-center shrink-0">
             <ShoppingBag className="w-5 h-5 text-[#131921]" />
           </div>

@@ -135,7 +135,9 @@ export default function PublicGeneral({
         user={customer}
         onSignIn={onLoginOpen}
         onLogout={onLogout}
-        brandIcon={(
+        brandIcon={profile.image_url ? (
+          <img src={resolveMediaUrl(profile.image_url)} alt="" className="w-10 h-10 rounded-xl object-cover shrink-0 bg-white" />
+        ) : (
           <div className="w-10 h-10 rounded-xl bg-[#111827] text-white flex items-center justify-center shrink-0">
             <GraduationCap className="w-5 h-5" />
           </div>

@@ -287,6 +287,35 @@ function HomeProductList({ api, categories = [], clientRef, resolvedHost, onCart
   const totalPages = Math.max(1, Math.ceil(total / HOME_PAGE_SIZE));
   const selectedCategory = categories.find((c) => c.id === categoryId);
 
+
+  const categorySortMap = useMemo(() => {
+    const map = new Map();
+    categories.forEach((cat) => {
+      map.set(cat.id, cat.sort_order || 0);
+    });
+    return map;
+  }, [categories]);
+
+  // Sort products by category sort_order
+  const sortedProducts = useMemo(() => {
+    if (!products.length) return [];
+    
+    return [...products].sort((a, b) => {
+      // Get sort_order for each product's category
+      const sortA = categorySortMap.get(a.category_id) ?? 999;
+      const sortB = categorySortMap.get(b.category_id) ?? 999;
+      
+      // First sort by category sort_order
+      if (sortA !== sortB) {
+        return sortA - sortB;
+      }
+      
+      // If same category, sort by product name or created_at
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }, [products, categorySortMap]);
+
+
   useEffect(() => {
     setPage(1);
   }, [categoryId]);
@@ -352,7 +381,7 @@ function HomeProductList({ api, categories = [], clientRef, resolvedHost, onCart
       ) : (
         <>
           <div className="space-y-3">
-            {products.map((p) => (
+            {sortedProducts.map((p) => (
               <ProductListRow
                 key={p.id}
                 product={p}
