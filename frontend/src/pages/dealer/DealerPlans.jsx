@@ -3,8 +3,20 @@ import { api, formatErr } from "../../lib/api";
 import PageHeader from "../../components/PageHeader";
 import PlanBadge from "../../components/PlanBadge";
 import { Button } from "../../components/ui/button";
-import { RefreshCw, ShieldCheck, CalendarClock, IndianRupee, HardDrive, ListChecks } from "lucide-react";
+import { RefreshCw, ShieldCheck, CalendarClock, IndianRupee, HardDrive, ListChecks, Monitor } from "lucide-react";
 import { toast } from "sonner";
+
+const VERTICALS = [
+  { value: "general", label: "General signage" },
+  { value: "doctor", label: "Doctor / Clinic" },
+  { value: "salon", label: "Salon / Spa" },
+  { value: "retailer", label: "Retailer" },
+  { value: "society", label: "Society / Apartment" },
+];
+
+function verticalLabel(value) {
+  return VERTICALS.find((v) => v.value === (value || "general"))?.label || value;
+}
 
 function formatCycle(value) {
   return value === "yearly" ? "Yearly" : "Monthly";
@@ -52,6 +64,7 @@ export default function DealerPlans() {
             </div>
 
             <div className="font-display text-2xl font-extrabold tracking-tight">{plan.name}</div>
+            <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">{verticalLabel(plan.vertical)}</div>
             <div className="mt-3 flex items-baseline gap-2">
               <IndianRupee className="w-4 h-4 text-[#111827]" />
               <span className="font-display text-4xl font-extrabold tracking-tighter">{Number(plan.price || 0).toLocaleString()}</span>
@@ -63,10 +76,14 @@ export default function DealerPlans() {
 
             <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-sm bg-[#F9FAFB] border border-[#E5E7EB] p-3">
+                <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Devices</div>
+                <div className="mt-1 font-semibold flex items-center gap-2"><Monitor className="w-4 h-4" /> {Number(plan.device_limit || 0) > 0 ? plan.device_limit : "Unlimited"}</div>
+              </div>
+              <div className="rounded-sm bg-[#F9FAFB] border border-[#E5E7EB] p-3">
                 <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Storage</div>
                 <div className="mt-1 font-semibold flex items-center gap-2"><HardDrive className="w-4 h-4" /> {Number(plan.storage_limit_gb || 0)} GB</div>
               </div>
-              <div className="rounded-sm bg-[#F9FAFB] border border-[#E5E7EB] p-3">
+              <div className="rounded-sm bg-[#F9FAFB] border border-[#E5E7EB] p-3 col-span-2">
                 <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Cycle</div>
                 <div className="mt-1 font-semibold flex items-center gap-2"><CalendarClock className="w-4 h-4" /> {formatCycle(plan.billing_cycle)}</div>
               </div>

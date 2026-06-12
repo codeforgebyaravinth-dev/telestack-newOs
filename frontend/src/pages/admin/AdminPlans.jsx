@@ -11,7 +11,17 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from ".
 import { Plus, Pencil, Trash2, IndianRupee, Check } from "lucide-react";
 import { toast } from "sonner";
 
-const empty = { name: "", type: "cloud", billing_cycle: "monthly", duration_days: 30, price: 0, storage_limit_gb: 0, description: "", features: [] };
+const empty = { name: "", type: "cloud", billing_cycle: "monthly", duration_days: 30, price: 0, storage_limit_gb: 0, device_limit: 0, vertical: "general", description: "", features: [] };
+
+const VERTICALS = [
+  { value: "general", label: "Academy / tuition / training" },
+  { value: "doctor", label: "Doctor / Clinic" },
+  { value: "salon", label: "Salon / Spa" },
+  { value: "retailer", label: "Retailer" },
+  { value: "society", label: "Society / Apartment" },
+];
+
+const verticalLabel = (value) => VERTICALS.find((v) => v.value === (value || "general"))?.label || value;
 
 export default function AdminPlans() {
   const [items, setItems] = useState([]);
@@ -91,6 +101,12 @@ export default function AdminPlans() {
               <span className="text-sm text-[#6B7280]">/ {p.billing_cycle === "custom" ? "custom" : p.billing_cycle === "yearly" ? "yr" : "mo"}</span>
             </div>
             <div className="mb-2 text-xs text-[#6B7280]">
+              Vertical: <span className="font-semibold text-[#111827]">{verticalLabel(p.vertical)}</span>
+            </div>
+            <div className="mb-2 text-xs text-[#6B7280]">
+              Device limit: <span className="font-semibold text-[#111827]">{Number(p.device_limit || 0) > 0 ? p.device_limit : "Unlimited"}</span>
+            </div>
+            <div className="mb-2 text-xs text-[#6B7280]">
               Duration: <span className="font-semibold text-[#111827]">{Number(p.duration_days || (p.billing_cycle === "yearly" ? 365 : 30))} days</span>
             </div>
               <div className="text-xs text-[#6B7280] mb-2">
@@ -134,6 +150,22 @@ export default function AdminPlans() {
               <div>
                 <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Price (₹)</Label>
                 <Input type="number" min="0" value={form.price} onChange={(e) => setForm({ ...form, price: parseFloat(e.target.value || 0) })} className="rounded-sm" data-testid="plan-price" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Business vertical</Label>
+                <Select value={form.vertical || "general"} onValueChange={(v) => setForm({ ...form, vertical: v })}>
+                  <SelectTrigger className="rounded-sm" data-testid="plan-vertical"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {VERTICALS.map((v) => <SelectItem key={v.value} value={v.value}>{v.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Device limit</Label>
+                <Input type="number" min="0" value={form.device_limit} onChange={(e) => setForm({ ...form, device_limit: parseInt(e.target.value || "0", 10) })} className="rounded-sm" data-testid="plan-device-limit" />
+                <p className="mt-1 text-xs text-[#6B7280]">0 = unlimited screens for this plan.</p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">

@@ -1,0 +1,43 @@
+import axios from "axios";
+
+const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+
+export function isCustomStoreHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  return host && !PLATFORM_HOSTS.has(host);
+}
+
+export function publicStoreBase(resolvedHost) {
+  if (resolvedHost || isCustomStoreHost(typeof window !== "undefined" ? window.location.hostname : "")) {
+    return `${window.location.origin}/api/public`;
+  }
+  return `${(process.env.REACT_APP_BACKEND_URL || "https://rpsignage.com").replace(/\/$/, "")}/api/public`;
+}
+
+export function createStoreApi(clientRef, resolvedHost) {
+  const base = `${publicStoreBase(resolvedHost)}/store/${encodeURIComponent(clientRef)}`;
+  const instance = axios.create({
+    baseURL: base,
+    withCredentials: true,
+    headers: { "Content-Type": "application/json" },
+  });
+  instance.interceptors.request.use((cfg) => {
+    const key = `shopper_token_${clientRef}`;
+    const t = localStorage.getItem(key);
+    if (t) cfg.headers.Authorization = `Bearer ${t}`;
+    return cfg;
+  });
+  return instance;
+}
+
+export function storePath(clientRef, sub = "", resolvedHost = null) {
+  if (resolvedHost || isCustomStoreHost(typeof window !== "undefined" ? window.location.hostname : "")) {
+    return sub ? `/${sub.replace(/^\//, "")}` : "/";
+  }
+  const base = `/store/${encodeURIComponent(clientRef)}`;
+  return sub ? `${base}/${sub.replace(/^\//, "")}` : base;
+}
+
+export function shopperTokenKey(clientRef) {
+  return `shopper_token_${clientRef}`;
+}

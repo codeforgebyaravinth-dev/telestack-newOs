@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import PageHeader from "../../components/PageHeader";
 import KpiCard from "../../components/KpiCard";
-import { Monitor, FileVideo, Wallet, CalendarCheck, Package, Building, HardDrive, ShieldCheck, CalendarClock } from "lucide-react";
+import { Monitor, FileVideo, Wallet, CalendarCheck, Package, Building, HardDrive, ShieldCheck, CalendarClock, GraduationCap, ClipboardList } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { } from "../../lib/utils";
 
-const VERTICAL_LABELS = { general: "General", doctor: "Doctor", salon: "Salon", retailer: "Retailer", society: "Society" };
+const VERTICAL_LABELS = { general: "Academy", doctor: "Doctor", salon: "Salon", retailer: "Retailer", society: "Society" };
 
 function formatDateTime(value) {
   if (!value) return "—";
@@ -67,7 +67,10 @@ export default function ClientDashboard() {
           <KpiCard label="Rooms" value={stats?.rooms ?? 0} hint="Registered units" Icon={Building} testid="kpi-rooms" />
         )}
         {stats?.vertical === "general" && (
-          <KpiCard label="Account type" value="General" hint="Standard signage" Icon={FileVideo} testid="kpi-acct" />
+          <>
+            <KpiCard label="Courses" value={stats?.courses ?? 0} hint="Published programs" Icon={GraduationCap} testid="kpi-courses" />
+            <KpiCard label="Pending enrollments" value={stats?.enrollments_pending ?? 0} hint="Awaiting confirmation" Icon={ClipboardList} testid="kpi-enrollments" />
+          </>
         )}
       </div>
 

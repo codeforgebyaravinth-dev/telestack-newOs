@@ -51,29 +51,6 @@ export default function DealerScreens() {
     catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
   };
 
-  const completePairing = async (device) => {
-    const code = window.prompt("Enter the pair code shared by the client:");
-    if (!code) return;
-    try {
-      await api.post("/dealer/pair/complete", { pair_code: code.trim(), device_id: device.id });
-      toast.success("Screen paired successfully");
-      load();
-    } catch (e) {
-      toast.error(formatErr(e.response?.data?.detail));
-    }
-  };
-
-  const unpairDevice = async (device) => {
-    if (!window.confirm(`Unpair ${device.name}?`)) return;
-    try {
-      await api.post(`/dealer/devices/${device.id}/unpair`);
-      toast.success("Screen unpaired");
-      load();
-    } catch (e) {
-      toast.error(formatErr(e.response?.data?.detail));
-    }
-  };
-
   const tplName = (id) => templates.find((t) => t.id === id)?.name || "—";
 
   const filtered = items.filter((d) => {
@@ -84,7 +61,7 @@ export default function DealerScreens() {
 
   return (
     <div data-testid="dealer-screens-page">
-      <PageHeader overline="Dealer / Screens" title="Client screens." subtitle="Screens are created by the client. Ask for the pair code, then complete pairing here and assign the screen settings." />
+      <PageHeader overline="Dealer / Screens" title="Client screens." subtitle="Screens are created by the client. Pairing is handled in the admin panel — use this view to review screens and update settings." />
 
       <div className="flex flex-col md:flex-row gap-3 mb-4">
         <div className="relative flex-1 max-w-md">
@@ -130,15 +107,6 @@ export default function DealerScreens() {
                 <TableCell><StatusBadge status={d.status} /></TableCell>
                 <TableCell><DeviceLiveBadge status={d.status} lastSeen={d.last_seen} /></TableCell>
                 <TableCell className="text-right">
-                  {d.status === "paired" ? (
-                    <Button size="sm" variant="outline" className="rounded-sm mr-1" onClick={() => unpairDevice(d)} data-testid={`unpair-screen-${d.id}`}>
-                      Unpair
-                    </Button>
-                  ) : (
-                    <Button size="sm" variant="outline" className="rounded-sm mr-1" onClick={() => completePairing(d)} data-testid={`pair-screen-${d.id}`}>
-                      Pair
-                    </Button>
-                  )}
                   <a href={`/play/${d.pair_code}`} target="_blank" rel="noreferrer" className="inline-flex items-center text-xs px-2 py-1 border border-[#E5E7EB] rounded-sm hover:bg-[#F3F4F6] mr-1" data-testid={`open-player-${d.id}`}>
                     <ExternalLink className="w-3 h-3 mr-1" /> Player
                   </a>

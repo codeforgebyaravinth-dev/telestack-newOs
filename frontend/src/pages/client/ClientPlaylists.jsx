@@ -81,6 +81,7 @@ const isAutoZone = (zone) => /^(header|weather|bookings)$/i.test(zone?.role || "
 function ZonePicker({ media, items, setItems }) {
   const [addType, setAddType] = useState(""); // for managing add dialog
   const [textValue, setTextValue] = useState("");
+  const [textFontSize, setTextFontSize] = useState(24);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [newDuration, setNewDuration] = useState(10);
 
@@ -92,8 +93,9 @@ function ZonePicker({ media, items, setItems }) {
 
   const addText = () => {
     if (textValue.trim()) {
-      setItems([...items, { type: "text", content: textValue, duration: newDuration }]);
+      setItems([...items, { type: "text", content: textValue, duration: newDuration, font_size: Math.max(12, Math.min(120, Number(textFontSize) || 24)) }]);
       setTextValue("");
+      setTextFontSize(24);
       setNewDuration(10);
       setAddType("");
     }
@@ -115,6 +117,9 @@ function ZonePicker({ media, items, setItems }) {
       bookings: { type: "bookings", title: "Today's bookings", duration: 14 },
       queue: { type: "queue", title: "Live queue", duration: 14 },
       notices: { type: "notices", title: "Notices", duration: 12 },
+      products: { type: "products", title: "Products", limit: 8, duration: 14 },
+      courses: { type: "courses", title: "Courses", limit: 8, duration: 14 },
+      services: { type: "services", title: "Services", limit: 8, duration: 14 },
     };
     const next = widgetDefaults[type];
     if (!next) return;
@@ -125,6 +130,7 @@ function ZonePicker({ media, items, setItems }) {
   const remove = (idx) => setItems(items.filter((_, i) => i !== idx));
   const setDur = (idx, d) => setItems(items.map((it, i) => (i === idx ? { ...it, duration: d } : it)));
   const setFit = (idx, fit) => setItems(items.map((it, i) => (i === idx ? { ...it, fit } : it)));
+  const setFontSize = (idx, size) => setItems(items.map((it, i) => (i === idx ? { ...it, font_size: Math.max(12, Math.min(120, Number(size) || 24)) } : it)));
   const move = (idx, dir) => {
     const j = idx + dir;
     if (j < 0 || j >= items.length) return;
@@ -152,6 +158,9 @@ function ZonePicker({ media, items, setItems }) {
               <Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start" onClick={() => addWidget("bookings")}>+ Bookings</Button>
               <Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start" onClick={() => addWidget("queue")}>+ Queue</Button>
               <Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start col-span-2" onClick={() => addWidget("notices")}>+ Notices</Button>
+              {/*<Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start" onClick={() => addWidget("products")}>+ Products</Button>
+              <Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start" onClick={() => addWidget("courses")}>+ Courses</Button>
+              <Button type="button" variant="outline" className="h-9 rounded-sm text-xs justify-start col-span-2" onClick={() => addWidget("services")}>+ Services</Button>*/}
             </div>
           </div>
 
@@ -175,9 +184,11 @@ function ZonePicker({ media, items, setItems }) {
             <div className="space-y-1">
               <Input value={textValue} onChange={(e) => setTextValue(e.target.value)} placeholder="Enter text..." className="rounded-sm text-xs h-8" />
               <div className="flex gap-1">
+                <Input type="number" min="12" max="120" value={textFontSize} onChange={(e) => setTextFontSize(parseInt(e.target.value || 24, 10))} className="rounded-sm text-xs h-8 w-16" title="Font size" />
                 <Input type="number" min="1" max="60" value={newDuration} onChange={(e) => setNewDuration(parseInt(e.target.value || 10))} className="rounded-sm text-xs h-8 w-16" />
                 <Button type="button" onClick={addText} className="rounded-sm bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 flex-1" disabled={!textValue.trim()}>Add Text</Button>
               </div>
+              <p className="text-[10px] text-[#9CA3AF]">Size px · duration sec</p>
             </div>
           </div>
 
@@ -217,6 +228,9 @@ function ZonePicker({ media, items, setItems }) {
                   {it.type === "bookings" && <div className="text-[8px] font-bold text-[#111827]">BK</div>}
                   {it.type === "queue" && <div className="text-[8px] font-bold text-[#111827]">Q</div>}
                   {it.type === "notices" && <div className="text-[8px] font-bold text-[#111827]">N</div>}
+                  {it.type === "products" && <div className="text-[8px] font-bold text-[#111827]">P</div>}
+                  {it.type === "courses" && <div className="text-[8px] font-bold text-[#111827]">C</div>}
+                  {it.type === "services" && <div className="text-[8px] font-bold text-[#111827]">S</div>}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-semibold truncate">
@@ -228,8 +242,11 @@ function ZonePicker({ media, items, setItems }) {
                     {it.type === "bookings" && (it.title || "Today's bookings")}
                     {it.type === "queue" && (it.title || "Queue")}
                     {it.type === "notices" && (it.title || "Notices")}
+                    {it.type === "products" && (it.title || "Products")}
+                    {it.type === "courses" && (it.title || "Courses")}
+                    {it.type === "services" && (it.title || "Services")}
                   </div>
-                  <div className="flex items-center gap-1 mt-0.5">
+                  <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                     {!(it.type === "youtube" || (it.type === "media" && m?.kind === "video")) ? (
                       <>
                         <Input type="number" min="1" value={it.duration} onChange={(e) => setDur(idx, parseInt(e.target.value || 1))} className="h-6 w-16 text-xs rounded-sm" />
@@ -237,6 +254,12 @@ function ZonePicker({ media, items, setItems }) {
                       </>
                     ) : (
                       <span className="text-[10px] text-[#6B7280]">Duration managed by media</span>
+                    )}
+                    {it.type === "text" && (
+                      <>
+                        <Input type="number" min="12" max="120" value={it.font_size || 24} onChange={(e) => setFontSize(idx, parseInt(e.target.value || 24, 10))} className="h-6 w-16 text-xs rounded-sm" />
+                        <span className="text-[10px] text-[#6B7280]">px</span>
+                      </>
                     )}
                   </div>
                   {it.type === "media" && (
@@ -266,6 +289,12 @@ function ZonePicker({ media, items, setItems }) {
                   )}
                   {it.type === "notices" && (
                     <Input value={it.title || ""} onChange={(e) => setItems(items.map((item, i) => (i === idx ? { ...item, title: e.target.value } : item)))} placeholder="Notices title" className="mt-1 h-6 rounded-sm text-xs" />
+                  )}
+                  {["products", "courses", "services"].includes(it.type) && (
+                    <>
+                      <Input value={it.title || ""} onChange={(e) => setItems(items.map((item, i) => (i === idx ? { ...item, title: e.target.value } : item)))} placeholder={`${it.type} title`} className="mt-1 h-6 rounded-sm text-xs" />
+                      <Input type="number" min="1" max="20" value={it.limit || 8} onChange={(e) => setItems(items.map((item, i) => (i === idx ? { ...item, limit: parseInt(e.target.value || 8, 10) } : item)))} placeholder="Show count" className="mt-1 h-6 rounded-sm text-xs" />
+                    </>
                   )}
                 </div>
                 <button type="button" onClick={() => remove(idx)} className="text-red-600 px-1">×</button>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Monitor, CircleSlash, Maximize, Menu, X, Eye, EyeOff, RotateCcw, RefreshCw, Play, Smartphone, Tv, Wifi, CheckCircle, AlertCircle, ArrowRight } from "lucide-react";
-import { API_BASE } from "../../lib/api";
+import { API_BASE, resolveMediaUrl } from "../../lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 
 const RAW_BASE = (process.env.REACT_APP_BACKEND_URL || "https://rpsignage.com").replace(/\/$/, "");
@@ -216,7 +216,116 @@ async function fetchWeatherFromCoords(latitude, longitude) {
   };
 }
 
-function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth, canvasHeight, mediaMode, viewportScale = 1, isMuted, isMutedRef }) {
+function PlayerCatalogCard({ name, imageUrl, price, compareAtPrice, subtitle, stock }) {
+  const img = resolveMediaUrl(imageUrl);
+  const numericPrice = Number(price || 0);
+  const numericCompare = Number(compareAtPrice || 0);
+  const discount = numericCompare > numericPrice
+    ? Math.round(((numericCompare - numericPrice) / numericCompare) * 100)
+    : 0;
+
+  return (
+    <div className="bg-white rounded-lg border border-[#D5D9D9] overflow-hidden flex flex-col w-[180px] shrink-0">
+      <div className="aspect-square w-full bg-[#F7F8F8] relative shrink-0">
+        {img ? (
+          <img src={img} alt={name || ""} className="absolute inset-0 w-full h-full object-cover p-2" />
+        ) : (
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200" />
+        )}
+        {discount > 0 && (
+          <span className="absolute top-2 left-2 bg-[#CC0C39] text-white text-[10px] font-bold px-2 py-0.5 rounded">
+            {discount}% off
+          </span>
+        )}
+      </div>
+      <div className="p-2 min-h-[104px] flex flex-col flex-1">
+        <div className="text-xs h-10 line-clamp-2 text-[#0F1111]">{name}</div>
+        {subtitle ? <div className="text-[10px] text-[#565959] line-clamp-1 mt-0.5">{subtitle}</div> : null}
+        <div className="mt-2 flex items-baseline gap-2 h-5">
+          <span className="text-base font-bold text-[#0F1111]">₹{numericPrice.toLocaleString()}</span>
+          {numericCompare > numericPrice ? (
+            <span className="text-xs text-[#565959] line-through">₹{numericCompare.toLocaleString()}</span>
+          ) : (
+            <span className="text-xs invisible select-none" aria-hidden="true">—</span>
+          )}
+        </div>
+        <div className="h-4 mt-1">
+          {stock != null && Number(stock) <= 0 ? (
+            <div className="text-xs text-red-600">Out of stock</div>
+          ) : (
+            <span className="text-xs invisible select-none" aria-hidden="true">.</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CatalogWidget({ type, cur, providerData, zoneScale }) {
+  const limit = Math.max(1, Math.min(20, Number(cur.limit) || 8));
+  const title = cur.title || (type === "products" ? "Products" : type === "courses" ? "Courses" : "Services");
+
+  let cards = [];
+  if (type === "products") {
+    cards = (Array.isArray(providerData?.products) ? providerData.products : []).slice(0, limit).map((product) => ({
+      key: product.id || product.name,
+      name: product.name,
+      imageUrl: product.image_urls?.[0] || product.image_url,
+      price: product.price,
+      compareAtPrice: product.compare_at_price,
+      stock: product.stock,
+      subtitle: product.sku || "",
+    }));
+  } else if (type === "courses") {
+    cards = (Array.isArray(providerData?.courses) ? providerData.courses : []).slice(0, limit).map((course) => ({
+      key: course.id || course.name || course.title,
+      name: course.name || course.title,
+      imageUrl: course.image_url || course.image_urls?.[0] || "",
+      price: course.price ?? course.fee,
+      subtitle: [course.duration, course.level, course.mode].filter(Boolean).join(" · "),
+    }));
+  } else {
+    cards = (Array.isArray(providerData?.profile?.services) ? providerData.profile.services : [])
+      .filter((service) => service?.active !== false)
+      .slice(0, limit)
+      .map((service, index) => ({
+        key: service.id || service.name || index,
+        name: service.name,
+        imageUrl: service.image_url,
+        price: service.price,
+        subtitle: service.duration_mins ? `${service.duration_mins} min` : (service.description || "Service"),
+      }));
+  }
+
+  const emptyLabel = type === "products" ? "No products published yet." : type === "courses" ? "No courses published yet." : "No services published yet.";
+
+  return (
+    <ResponsiveZoneShell scale={zoneScale}>
+      <div className="w-full h-full bg-[#EAEDED] p-4 flex flex-col overflow-hidden">
+        <h2 className="text-lg font-bold text-[#0F1111] mb-3 shrink-0">{title}</h2>
+        {cards.length === 0 ? (
+          <div className="text-sm text-[#565959]">{emptyLabel}</div>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto pb-2 items-start flex-1 min-h-0">
+            {cards.map((card) => (
+              <PlayerCatalogCard
+                key={card.key}
+                name={card.name}
+                imageUrl={card.imageUrl}
+                price={card.price}
+                compareAtPrice={card.compareAtPrice}
+                subtitle={card.subtitle}
+                stock={card.stock}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </ResponsiveZoneShell>
+  );
+}
+
+function MediaSlot({ items, label, queuePreview, weatherData, providerData, zone, canvasWidth, canvasHeight, mediaMode, viewportScale = 1, isMuted, isMutedRef }) {
   const [idx, setIdx] = useState(0);
   const [showFrame, setShowFrame] = useState(true);
   const timerRef = useRef(null);
@@ -493,6 +602,10 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
     );
   }
 
+  if (itemType === "products" || itemType === "courses" || itemType === "services") {
+    return <CatalogWidget type={itemType} cur={cur} providerData={providerData} zoneScale={zoneScale} />;
+  }
+
  if (itemType === "notices") {
   const notices = Array.isArray(cur.notices) ? cur.notices : Array.isArray(cur.items) ? cur.items : [];
 
@@ -572,10 +685,18 @@ function MediaSlot({ items, label, queuePreview, weatherData, zone, canvasWidth,
   const youtubeId = getYoutubeId(cur?.url);
   const isYoutubeSource = Boolean(youtubeId) || String(cur.type || cur.kind || "").toLowerCase() === "youtube";
 
+  const shellScale = Math.max(0.35, Math.min(2.5, Number(zoneScale) || 1));
+  const textSizePx = Math.max(12, Math.min(120, Number(cur.font_size) || 24));
+
   const content =
     (cur.type === "text" || cur.kind === "text") ? (
       <div className="w-full h-full flex items-center justify-center bg-black p-6 text-center overflow-hidden">
-        <div className="max-w-[90%] text-white font-display text-2xl font-bold leading-tight">{cur.content || cur.text}</div>
+        <div
+          className="max-w-[90%] text-white font-display font-bold leading-tight"
+          style={{ fontSize: `${textSizePx / shellScale}px` }}
+        >
+          {cur.content || cur.text}
+        </div>
       </div>
     ) : isYoutubeSource ? (
       <div className="w-full h-full flex items-center justify-center bg-black overflow-hidden">
@@ -1294,6 +1415,8 @@ export default function SignagePlayer() {
   const [liveWeather, setLiveWeather] = useState(null);
   const [weatherState, setWeatherState] = useState("idle");
   const [err, setErr] = useState("");
+
+  
   const lastGreetSpokenRef = useRef(0);
   const wrapRef = useRef(null);
   // Container refs for absolute layout measurements
@@ -1407,6 +1530,16 @@ export default function SignagePlayer() {
     setOrientationOverride(["auto", "landscape", "portrait"].includes(mode) ? mode : "auto");
   }, []);
 
+  const applyPlayerSettings = useCallback((settings) => {
+    if (!settings || typeof settings !== "object") return;
+    if (Array.isArray(settings.hidden_zone_ids)) setHiddenZoneIds(settings.hidden_zone_ids);
+    if (typeof settings.fill_blank_spaces === "boolean") setFillBlankSpaces(settings.fill_blank_spaces);
+    if (typeof settings.custom_placement_enabled === "boolean") setCustomPlacementEnabled(settings.custom_placement_enabled);
+    if (settings.zone_placements && typeof settings.zone_placements === "object") setZonePlacements(settings.zone_placements);
+    if (settings.zone_media_modes && typeof settings.zone_media_modes === "object") setZoneMediaModes(settings.zone_media_modes);
+    if (["auto", "landscape", "portrait"].includes(settings.orientation)) setOrientationOverride(settings.orientation);
+  }, []);
+
   const sendOfflineBeacon = useCallback(() => {
     if (!currentPairCode || offlineBeaconSentRef.current) return;
     offlineBeaconSentRef.current = true;
@@ -1479,6 +1612,14 @@ export default function SignagePlayer() {
       const fp = getOrCreateFingerprint();
       const { data } = await axios.get(`${BASE}/api/public/player/${currentPairCode}`, { headers: { 'X-Device-Fingerprint': fp } });
       setPayload(data);
+      if (data?.player_settings) {
+        applyPlayerSettings({
+          ...data.player_settings,
+          orientation: data.orientation,
+        });
+      } else if (data?.orientation) {
+        setPlayerOrientation(data.orientation);
+      }
       try { console.debug("player-payload", data); } catch (e) { }
       setErr("");
       setPairingError("");
@@ -1491,7 +1632,12 @@ export default function SignagePlayer() {
         setErr(e.response?.data?.detail || "Could not load");
       }
     }
-  }, [currentPairCode]);
+  }, [currentPairCode, applyPlayerSettings, setPlayerOrientation]);
+
+  const payloadDeviceIdRef = useRef("");
+  useEffect(() => {
+    payloadDeviceIdRef.current = payload?.device_id || "";
+  }, [payload?.device_id]);
 
   useEffect(() => {
     if (currentPairCode && !showPairing && !showSplash) {
@@ -1665,6 +1811,11 @@ export default function SignagePlayer() {
               const data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
               if (data && data.type === "content_refresh") {
                 poll();
+              } else if (data && data.type === "player_settings_update") {
+                const deviceId = payloadDeviceIdRef.current;
+                if (!data.device_id || !deviceId || data.device_id === deviceId) {
+                  applyPlayerSettings(data.settings || {});
+                }
               }
             } catch (e) {
               // ignore parse errors
@@ -1701,7 +1852,7 @@ export default function SignagePlayer() {
         }
       };
     }
-  }, [poll, currentPairCode, contentSocketUrl, showPairing, showSplash]);
+  }, [poll, currentPairCode, contentSocketUrl, showPairing, showSplash, applyPlayerSettings]);
 
   useEffect(() => {
     if (!currentPairCode || showPairing || showSplash) return;
@@ -2482,6 +2633,7 @@ export default function SignagePlayer() {
                           label={zone.name}
                           queuePreview={queuePreview}
                           weatherData={weatherData}
+                          providerData={providerData}
                           zone={zone}
                           canvasWidth={canvasWidth}
                           canvasHeight={canvasHeight}
@@ -2518,6 +2670,7 @@ export default function SignagePlayer() {
                       label={zone.name}
                       queuePreview={queuePreview}
                       weatherData={weatherData}
+                      providerData={providerData}
                       zone={zone}
                       canvasWidth={canvasWidth}
                       canvasHeight={canvasHeight}

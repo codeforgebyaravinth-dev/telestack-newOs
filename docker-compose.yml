@@ -58,6 +58,15 @@ services:
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_BUCKET: ${S3_BUCKET}
       SUPABASE_URL: ${SUPABASE_URL}
+      BOOKING_DOMAIN_CNAME_TARGET: ${BOOKING_DOMAIN_CNAME_TARGET:-booking.rpsignage.com}
+      BOOKING_DOMAIN_TARGET_IP: ${BOOKING_DOMAIN_TARGET_IP:-}
+      BOOKING_DOMAINS_DIR: /booking-domains
+      BOOKING_SSL_COMPOSE_ROOT: ${BOOKING_SSL_COMPOSE_ROOT:-/compose}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+    volumes:
+      - ./nginx/booking-domains:/booking-domains
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/compose:ro
     depends_on:
       mongodb:
         condition: service_healthy
@@ -98,6 +107,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/booking-domains-include.conf:/etc/nginx/conf.d/00-booking-domains.conf:ro
+      - ./nginx/booking-domains:/etc/nginx/booking-domains
       - ./nginx/certs:/etc/letsencrypt
       - ./nginx/www:/var/www/certbot
 

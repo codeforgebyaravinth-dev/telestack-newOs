@@ -1,15 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Navigate } from "react-router-dom";
 import axios from "axios";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
-import { Stethoscope, Clock, MapPin, Phone, CalendarCheck, IndianRupee, CircleSlash, ArrowLeft, ShoppingBag, Tag } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { CircleSlash, ArrowLeft, ShoppingBag, Tag, Package } from "lucide-react";
 import { toast } from "sonner";
-import { formatErr } from "../lib/api";
+import { formatErr, resolveMediaUrl } from "../lib/api";
+import {
+  createPublicCustomerApi, customerTokenKey, loadActiveBookings, saveActiveBooking,
+  removeActiveBooking, isActiveBookingStatus, publicApiBase, isCustomPublicHost,
+} from "../lib/publicCustomerApi";
+import PublicGeneral from "./PublicGeneral";
+import PublicSalonDoctor from "./PublicSalonDoctor";
 
-const BASE = `${(process.env.REACT_APP_BACKEND_URL || "https://rpsignage.com").replace(/\/$/, "")}/api/public`;
+const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+
+function isCustomBookingHost(hostname) {
+  return isCustomPublicHost(hostname);
+}
 
 function parseTimeToMinutes(value) {
   if (!value) return null;
@@ -57,21 +68,110 @@ function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
-export default function PublicBooking() {
-  const { clientId } = useParams();
+function BookingAuthDialog({ open, onOpenChange, mode, setMode, onLogin, onSignup }) {
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ email: "", password: "", name: "", phone: "" });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        await onSignup(form);
+        toast.success("Account created");
+      } else {
+        await onLogin(form.email, form.password);
+        toast.success("Signed in");
+      }
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(formatErr(err.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="rounded-2xl max-w-md">
+        <DialogHeader>
+          <DialogTitle>{mode === "signup" ? "Create account" : "Sign in"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          {mode === "signup" && (
+            <>
+              <div><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-xl mt-1" /></div>
+              <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="rounded-xl mt-1" /></div>
+            </>
+          )}
+          <div><Label>Email</Label><Input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-xl mt-1" /></div>
+          <div><Label>Password</Label><Input type="password" required minLength={6} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-xl mt-1" /></div>
+          <DialogFooter className="flex-col sm:flex-col gap-2">
+            <Button type="submit" disabled={busy} className="w-full rounded-xl bg-[#111827] text-white">{busy ? "Please wait..." : mode === "signup" ? "Create account" : "Sign in"}</Button>
+            <button type="button" className="text-sm text-[#007185]" onClick={() => setMode(mode === "signup" ? "login" : "signup")}>
+              {mode === "signup" ? "Already have an account? Sign in" : "New here? Create account"}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export default function PublicBooking({ resolvedHost = null }) {
+  return <PublicBookingInner resolvedHost={resolvedHost} />;
+}
+
+function PublicBookingInner({ resolvedHost = null }) {
+  const { clientId: routeClientId } = useParams();
+  const [resolvedClientId, setResolvedClientId] = useState(routeClientId || "");
   const branchId = useMemo(() => new URLSearchParams(window.location.search).get("branch_id") || "", []);
+  const apiBase = useMemo(() => publicApiBase(resolvedHost), [resolvedHost]);
+  const clientId = routeClientId || resolvedClientId;
+  const authRef = routeClientId || clientId;
+  const customerApi = useMemo(() => (authRef && authRef !== false ? createPublicCustomerApi(authRef, resolvedHost, "providers") : null), [authRef, resolvedHost]);
+  const [customer, setCustomer] = useState(null);
   const [doc, setDoc] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(null);
+  const [justBooked, setJustBooked] = useState(false);
+  const [activeBookings, setActiveBookings] = useState([]);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState("login");
   const [detailItem, setDetailItem] = useState(null);
   const [form, setForm] = useState({ patient_name: "", patient_phone: "", preferred_time: "", booking_location: "", booking_device_id: "", service_name: "", service_id: "", service_ids: [], service_price: 0, notes: "" });
 
   useEffect(() => {
+    if (routeClientId) {
+      setResolvedClientId(routeClientId);
+      return;
+    }
+    const host = resolvedHost || window.location.hostname;
+    if (!isCustomBookingHost(host)) {
+      setResolvedClientId(false);
+      return;
+    }
+    let mounted = true;
+    setLoading(true);
+    axios.get(`${publicApiBase(host)}/resolve-host`, { params: { host } })
+      .then(({ data }) => { if (mounted) setResolvedClientId(data?.client_id || false); })
+      .catch(() => { if (mounted) setResolvedClientId(false); });
+    return () => { mounted = false; };
+  }, [routeClientId, resolvedHost]);
+
+  useEffect(() => {
+    if (!clientId || clientId === false) {
+      setLoading(false);
+      setDoc(clientId === false ? false : null);
+      return;
+    }
     let mounted = true;
     const loadDoc = async () => {
       try {
-        const url = branchId ? `${BASE}/providers/${clientId}/branches/${encodeURIComponent(branchId)}` : `${BASE}/providers/${clientId}`;
+        const url = branchId
+          ? `${apiBase}/providers/${clientId}/branches/${encodeURIComponent(branchId)}`
+          : `${apiBase}/providers/${clientId}`;
         const { data } = await axios.get(url);
         if (mounted) setDoc(data);
       } catch {
@@ -80,22 +180,117 @@ export default function PublicBooking() {
         if (mounted) setLoading(false);
       }
     };
+    setLoading(true);
     loadDoc();
     const timer = setInterval(loadDoc, 20000);
     return () => {
       mounted = false;
       clearInterval(timer);
     };
-  }, [clientId, branchId]);
+  }, [clientId, branchId, apiBase]);
+
+  const isBookingVertical = doc?.vertical === "doctor" || doc?.vertical === "salon";
+
+  useEffect(() => {
+    if (!customerApi || !isBookingVertical) return;
+    const token = localStorage.getItem(customerTokenKey(authRef));
+    if (!token) {
+      setCustomer(false);
+      return;
+    }
+    customerApi.get("/auth/me").then(({ data }) => setCustomer(data)).catch(() => {
+      localStorage.removeItem(customerTokenKey(authRef));
+      setCustomer(false);
+    });
+  }, [customerApi, authRef, isBookingVertical]);
+
+  useEffect(() => {
+    if (!clientId || !isBookingVertical) return;
+    setActiveBookings(loadActiveBookings(clientId, branchId));
+  }, [clientId, branchId, isBookingVertical]);
+
+  useEffect(() => {
+    if (!customer || customer === false || !customerApi || !isBookingVertical) return;
+    (async () => {
+      try {
+        const params = branchId ? { branch_id: branchId } : {};
+        const { data } = await customerApi.get("/my-appointments", { params });
+        if (Array.isArray(data) && data.length) {
+          data.filter((item) => isActiveBookingStatus(item?.status)).forEach((item) => {
+            saveActiveBooking(clientId, branchId, item);
+          });
+          setActiveBookings(loadActiveBookings(clientId, branchId));
+        }
+      } catch {}
+    })();
+  }, [customer, customerApi, clientId, branchId, isBookingVertical]);
+
+  useEffect(() => {
+    if (!customer || customer === false || !isBookingVertical) return;
+    setForm((prev) => ({
+      ...prev,
+      patient_name: prev.patient_name || customer.name || "",
+      patient_phone: prev.patient_phone || customer.phone || "",
+    }));
+  }, [customer, isBookingVertical]);
+
+  useEffect(() => {
+    if (!clientId || !isBookingVertical) return;
+    const refreshAll = async () => {
+      const list = loadActiveBookings(clientId, branchId);
+      if (!list.length) {
+        setActiveBookings([]);
+        return;
+      }
+      const updates = await Promise.all(
+        list.map(async (item) => {
+          try {
+            const { data } = await axios.get(`${apiBase}/providers/${clientId}/appointments/${item.id}`);
+            return data || item;
+          } catch {
+            return item;
+          }
+        }),
+      );
+      updates.forEach((item) => {
+        if (item?.id && isActiveBookingStatus(item.status)) {
+          saveActiveBooking(clientId, branchId, item);
+        } else if (item?.id) {
+          removeActiveBooking(clientId, branchId, item.id);
+        }
+      });
+      setActiveBookings(loadActiveBookings(clientId, branchId));
+    };
+    refreshAll();
+    const timer = setInterval(refreshAll, 20000);
+    return () => clearInterval(timer);
+  }, [clientId, branchId, apiBase, isBookingVertical]);
+
+  const handleCustomerLogin = async (email, password) => {
+    const { data } = await customerApi.post("/auth/login", { email, password });
+    if (data.access_token) localStorage.setItem(customerTokenKey(authRef), data.access_token);
+    setCustomer(data.shopper);
+    return data.shopper;
+  };
+
+  const handleCustomerSignup = async (payload) => {
+    const { data } = await customerApi.post("/auth/signup", payload);
+    if (data.access_token) localStorage.setItem(customerTokenKey(authRef), data.access_token);
+    setCustomer(data.shopper);
+    return data.shopper;
+  };
+
+  const handleCustomerLogout = async () => {
+    try { await customerApi.post("/auth/logout"); } catch {}
+    localStorage.removeItem(customerTokenKey(authRef));
+    setCustomer(false);
+  };
 
   const profile = doc?.profile || {};
   const services = useMemo(() => {
     const raw = Array.isArray(profile.services) ? profile.services : [];
-    const visible = raw.filter((item) => item?.active !== false);
-    if (visible.length > 0) return visible;
-    if (!profile.specialty && !profile.fee) return [];
-    return [{ id: "featured", name: profile.specialty || (doc?.vertical === "salon" ? "Premium haircut" : "Consultation"), price: Number(profile.fee || 0), duration_mins: Number(profile.slot_minutes || 15), description: profile.description || "", image_url: profile.image_url || "", active: true }];
-  }, [profile.description, profile.fee, profile.image_url, profile.services, profile.slot_minutes, profile.specialty, doc?.vertical]);
+    return raw.filter((item) => item?.active !== false);
+  }, [profile.services]);
 
   useEffect(() => {
     if (services.length && !form.service_ids.length && !form.service_id) {
@@ -216,6 +411,16 @@ export default function PublicBooking() {
 
   const closeDetail = () => setDetailItem(null);
 
+  const selectServiceForBooking = (service) => {
+    setForm((prev) => ({
+      ...prev,
+      service_id: service.id || "",
+      service_ids: service.id ? [service.id] : prev.service_ids,
+      service_name: service.name || prev.service_name,
+      service_price: Number(service.price || 0),
+    }));
+  };
+
   const validateForm = () => {
     if (!String(form.patient_name || "").trim() || String(form.patient_name || "").trim().length < 2) {
       return "Enter a valid name (minimum 2 characters).";
@@ -252,9 +457,14 @@ export default function PublicBooking() {
         service_name: serviceNames.join(" + ") || form.service_name,
         service_price: Number(totalPrice || form.service_price || 0),
       };
-      const url = branchId ? `${BASE}/providers/${clientId}/branches/${encodeURIComponent(branchId)}/book` : `${BASE}/providers/${clientId}/book`;
-      const { data } = await axios.post(url, payload);
+      const url = branchId ? `${apiBase}/providers/${clientId}/branches/${encodeURIComponent(branchId)}/book` : `${apiBase}/providers/${clientId}/book`;
+      const token = localStorage.getItem(customerTokenKey(authRef));
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const { data } = await axios.post(url, payload, { headers, withCredentials: true });
+      saveActiveBooking(clientId, branchId, data);
+      setActiveBookings(loadActiveBookings(clientId, branchId));
       setConfirmed(data);
+      setJustBooked(true);
       toast.success(`Token #${data.token} confirmed`);
     } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
     finally { setBusy(false); }
@@ -263,25 +473,12 @@ export default function PublicBooking() {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-sm text-[#6B7280] font-mono uppercase tracking-widest">Loading...</div>;
   if (!doc) return <div className="min-h-screen flex items-center justify-center"><div className="text-center"><CircleSlash className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" /><h2 className="font-display text-2xl font-extrabold">Provider not found</h2><p className="text-sm text-[#6B7280] mt-1">This booking link is invalid.</p></div></div>;
 
-  const isOpen = profile.is_open !== false;
-  const isSalon = doc.vertical === "salon";
-  const providerLabel = isSalon ? "Salon" : "Clinic";
-  const serviceLabel = isSalon ? "service" : "appointment";
-
-  if (confirmed) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(17,24,39,0.18),_transparent_40%),linear-gradient(180deg,#F8FAFC,#EEF2FF)] p-6">
-        <div className="bg-white/90 backdrop-blur border border-white shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] rounded-3xl p-10 max-w-md w-full text-center">
-          <CalendarCheck className="w-12 h-12 text-[#10B981] mx-auto mb-4" />
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-2">Booking confirmed</div>
-          <h2 className="font-display text-3xl font-extrabold tracking-tighter">Your token</h2>
-          <div className="font-display text-7xl font-extrabold tracking-tighter my-6">#{confirmed.token}</div>
-          <p className="text-sm text-[#6B7280]">Visit <strong>{doc.name}</strong> on <strong>{confirmed.date}</strong>. Your time is <strong>{confirmed.assigned_time || confirmed.preferred_time || "ASAP"}</strong>.</p>
-          <Button onClick={() => { setConfirmed(null); setForm({ patient_name: "", patient_phone: "", preferred_time: "", booking_location: "", booking_device_id: "", service_name: "", service_id: "", service_ids: [], service_price: 0, notes: "" }); }} variant="outline" className="rounded-sm mt-6" data-testid="book-another">Book another</Button>
-        </div>
-      </div>
-    );
+  if (doc.vertical === "retailer" && !resolvedHost && clientId) {
+    return <Navigate to={`/store/${encodeURIComponent(routeClientId || clientId)}`} replace />;
   }
+
+  const isOpen = profile.is_open !== false;
+  const isSalon = String(doc?.vertical || "").toLowerCase() === "salon";
 
   if (detailItem && detailItem.kind === "product" && doc.vertical === "retailer") {
     return (
@@ -343,76 +540,6 @@ export default function PublicBooking() {
     );
   }
 
-  if (detailItem && detailItem.kind === "service") {
-    return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(17,24,39,0.12),_transparent_42%),linear-gradient(180deg,#F8FAFC,#EEF2FF)] text-[#111827]">
-        <header className="px-4 sm:px-6 py-4 sm:py-5">
-          <div className="max-w-6xl mx-auto flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-2xl bg-[#111827] text-white px-4 sm:px-5 py-4 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.7)]">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white text-[#111827] flex items-center justify-center rounded-xl"><Stethoscope className="w-5 h-5" /></div>
-              <div>
-                <div className="font-display font-extrabold text-lg tracking-tight">SIGNAGE OS · Storefront</div>
-                <div className="text-xs text-white/60 uppercase tracking-[0.2em]">Service details</div>
-              </div>
-            </div>
-            <Button type="button" variant="outline" onClick={closeDetail} className="rounded-xl bg-white/10 text-white border-white/15 hover:bg-white/20">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to services
-            </Button>
-          </div>
-        </header>
-
-        <main className="max-w-6xl mx-auto px-4 sm:px-6 pb-10">
-          <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr] items-start">
-            <div className="rounded-[2rem] overflow-hidden border border-white/60 bg-white shadow-[0_30px_80px_-50px_rgba(15,23,42,0.45)]">
-              <div className="relative min-h-[420px] bg-[#0F172A]">
-                {detailItem.image_url ? <img src={detailItem.image_url} alt={detailItem.name} className="absolute inset-0 w-full h-full object-cover" /> : <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.15),transparent_35%),linear-gradient(135deg,#0F172A,#334155)]" />}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
-                <div className="absolute inset-x-0 bottom-0 p-6 text-white">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] uppercase tracking-[0.35em] text-white/70">
-                    <Clock className="w-3.5 h-3.5" /> Service
-                  </div>
-                  <h1 className="mt-3 font-display text-4xl md:text-5xl font-extrabold tracking-tighter max-w-2xl">{detailItem.name}</h1>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[2rem] border border-[#E5E7EB] bg-white p-6 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.25)] lg:sticky lg:top-6">
-              <div className="text-[10px] uppercase tracking-[0.4em] text-[#6B7280]">Service details</div>
-              <div className="mt-2 font-display text-3xl font-extrabold tracking-tight text-[#0F172A]">{detailItem.name}</div>
-              <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.35em] text-[#6B7280]">Price</div>
-                  <div className="mt-1 font-display text-3xl font-black text-[#111827]">₹{Number(detailItem.price || 0).toLocaleString()}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[10px] uppercase tracking-[0.35em] text-[#6B7280]">Duration</div>
-                  <div className="mt-1 font-semibold text-[#111827]">{detailItem.duration_mins || profile.slot_minutes || 15} min</div>
-                </div>
-              </div>
-              <div className="mt-5 space-y-3 text-sm text-[#374151] leading-6">
-                <p>{detailItem.description || "Service details are available here."}</p>
-              </div>
-              <div className="mt-6 flex gap-3">
-                <Button type="button" className="flex-1 rounded-2xl bg-[#111827] hover:bg-[#374151] text-white" onClick={() => {
-                  setForm((prev) => ({
-                    ...prev,
-                    service_id: detailItem.id,
-                    service_ids: detailItem.id ? [detailItem.id] : prev.service_ids,
-                    service_name: detailItem.name,
-                    service_price: detailItem.price,
-                  }));
-                  closeDetail();
-                }}>
-                  Book this service
-                </Button>
-                <Button type="button" variant="outline" className="rounded-2xl" onClick={closeDetail}>Close</Button>
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
   // Retailer storefront: render product catalog instead of booking form
   if (doc.vertical === "retailer") {
     const products = Array.isArray(doc.products) ? doc.products : [];
@@ -421,10 +548,10 @@ export default function PublicBooking() {
         <header className="px-4 sm:px-6 py-4 sm:py-5">
           <div className="max-w-6xl mx-auto flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-2xl bg-[#111827] text-white px-4 sm:px-5 py-4 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.7)]">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white text-[#111827] flex items-center justify-center rounded-xl"><Stethoscope className="w-5 h-5" /></div>
+              <div className="w-10 h-10 bg-white text-[#111827] flex items-center justify-center rounded-xl"><ShoppingBag className="w-5 h-5" /></div>
               <div>
                 <div className="font-display font-extrabold text-lg tracking-tight">SIGNAGE OS · Storefront</div>
-                <div className="text-xs text-white/60 uppercase tracking-[0.2em]">Premium storefront</div>
+                <div className="text-xs text-white/60 uppercase tracking-[0.2em]">Retail catalog</div>
               </div>
             </div>
             <span className={`text-[11px] font-semibold uppercase tracking-wider px-3 py-1.5 rounded-full border ${doc?.profile?.is_open !== false ? "bg-emerald-400/15 border-emerald-300/30 text-emerald-100" : "bg-white/10 border-white/20 text-white/70"}`}>{doc?.profile?.is_open !== false ? "Open" : "Closed"}</span>
@@ -440,7 +567,9 @@ export default function PublicBooking() {
                 <div className="absolute inset-x-0 bottom-0 p-6 text-white">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.25em] text-white/65 mb-2">Store</div>
                   <h1 className="font-display text-4xl md:text-5xl font-extrabold tracking-tighter max-w-2xl">{doc.name}</h1>
-                  <p className="mt-3 max-w-2xl text-sm md:text-base text-white/80">{doc.profile?.description || "Beautiful product storefront."}</p>
+                  {profile.specialty ? <p className="mt-2 max-w-2xl text-sm md:text-base font-semibold text-white/90">{profile.specialty}</p> : null}
+                  <p className="mt-3 max-w-2xl text-sm md:text-base text-white/80">{profile.description || "Browse products and contact the seller."}</p>
+                  {profile.hours ? <p className="mt-2 text-sm text-white/70">{profile.hours}</p> : null}
                 </div>
               </div>
             </div>
@@ -453,6 +582,13 @@ export default function PublicBooking() {
                 </div>
                 <div className="text-sm text-[#6B7280]">{products.length} items</div>
               </div>
+              {products.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[#D1D5DB] bg-white p-10 text-center">
+                  <Package className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" />
+                  <h3 className="font-display text-xl font-extrabold tracking-tight">No products yet</h3>
+                  <p className="mt-2 text-sm text-[#6B7280]">This store has not published any products yet. Please check back soon.</p>
+                </div>
+              ) : (
               <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 md:grid-cols-3">
                 {products.map((p) => (
                   <div
@@ -481,6 +617,7 @@ export default function PublicBooking() {
                   </div>
                 ))}
               </div>
+              )}
             </section>
           </div>
         </main>
@@ -488,211 +625,60 @@ export default function PublicBooking() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(17,24,39,0.12),_transparent_42%),linear-gradient(180deg,#F8FAFC,#EEF2FF)] text-[#111827]">
-      <header className="px-4 sm:px-6 py-4 sm:py-5">
-        <div className="max-w-6xl mx-auto flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-2xl bg-[#111827] text-white px-4 sm:px-5 py-4 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.7)]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white text-[#111827] flex items-center justify-center rounded-xl"><Stethoscope className="w-5 h-5" /></div>
-            <div>
-              <div className="font-display font-extrabold text-lg tracking-tight">SIGNAGE OS · Storefront</div>
-              <div className="text-xs text-white/60 uppercase tracking-[0.2em]">Premium booking experience</div>
-            </div>
-          </div>
-          <span className={`text-[11px] font-semibold uppercase tracking-wider px-3 py-1.5 rounded-full border ${isOpen ? "bg-emerald-400/15 border-emerald-300/30 text-emerald-100" : "bg-white/10 border-white/20 text-white/70"}`}>{isOpen ? "Open today" : "Closed"}</span>
+  if (doc.vertical === "general") {
+    return <PublicGeneral doc={doc} clientId={clientId} apiBase={apiBase} />;
+  }
+
+  if (doc.vertical === "society") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] p-6">
+        <div className="text-center max-w-md">
+          <CircleSlash className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" />
+          <h2 className="font-display text-2xl font-extrabold">Public page not available</h2>
+          <p className="text-sm text-[#6B7280] mt-2">Society accounts use the resident directory in the client panel.</p>
         </div>
-      </header>
+      </div>
+    );
+  }
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 pb-10">
-        <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] items-start">
-          <div className="space-y-6">
-            <div className="rounded-[2rem] overflow-hidden border border-white/60 bg-white shadow-[0_30px_80px_-50px_rgba(15,23,42,0.45)]">
-              <div className="relative min-h-[280px] bg-[#0F172A]">
-                {profile.image_url ? <img src={profile.image_url} alt={doc.name} className="absolute inset-0 w-full h-full object-cover" /> : <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.15),transparent_35%),linear-gradient(135deg,#0F172A,#334155)]" />}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
-                <div className="absolute inset-x-0 bottom-0 p-6 text-white">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.25em] text-white/65 mb-2">{providerLabel}</div>
-                  <h1 className="font-display text-4xl md:text-5xl font-extrabold tracking-tighter max-w-2xl">{doc.name}</h1>
-                  {profile.specialty ? (
-                    <p className="mt-2 max-w-2xl text-sm md:text-base font-semibold text-white/90">{profile.specialty}</p>
-                  ) : null}
-                  <p className="mt-3 max-w-2xl text-sm md:text-base text-white/80">{profile.description || (isSalon ? "Curated cuts, styling, and premium grooming appointments." : "Elegant appointments, trusted care, and quick booking.")}</p>
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 p-4 sm:p-6">
-                <div className="rounded-2xl bg-[#F8FAFC] p-4 border border-[#E5E7EB]"><div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Currently serving token</div><div className="font-display text-3xl font-extrabold mt-1">{currentlyServingToken || "—"}</div><div className="text-xs text-[#6B7280]">The token being served right now</div></div>
-                <div className="rounded-2xl bg-[#F8FAFC] p-4 border border-[#E5E7EB]"><div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Live wait</div><div className="font-display text-3xl font-extrabold mt-1">~{approxWaitMinutes}m</div><div className="text-xs text-[#6B7280]">Updated every 20 sec</div></div>
-                <div className="rounded-2xl bg-[#F8FAFC] p-4 border border-[#E5E7EB]"><div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Hours</div><div className="font-semibold mt-1">{profile.hours || "Open daily"}</div><div className="text-xs text-[#6B7280]">Plan your visit</div></div>
-                <div className="rounded-2xl bg-[#F8FAFC] p-4 border border-[#E5E7EB]"><div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Starting from</div><div className="font-display text-3xl font-extrabold mt-1">₹{Number(selectedService?.price ?? profile.fee ?? 0).toLocaleString()}</div><div className="text-xs text-[#6B7280]">Selected service</div></div>
-              </div>
-              <div className="px-6 pb-6">
-                <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Currently serving token</div>
-                      <div className="font-display text-xl font-extrabold tracking-tight">Now serving</div>
-                    </div>
-                    <div className="text-xs text-[#6B7280]">{currentlyServingToken ? `Token #${currentlyServingToken}` : "No token serving"}</div>
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {currentlyServingToken ? (
-                      <div className="min-w-[220px] rounded-xl bg-white border border-[#E5E7EB] p-4 shadow-sm">
-                        <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Currently serving</div>
-                        <div className="font-display text-4xl font-extrabold tracking-tight text-[#111827] mt-1">Token #{currentlyServingToken}</div>
-                        <div className="text-xs text-[#6B7280] mt-2">This is the token being served on screen right now.</div>
-                      </div>
-                    ) : (
-                      <div className="text-sm text-[#6B7280]">The queue is empty right now.</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {services.length > 0 && (
-              <div>
-                <div className="flex items-end justify-between mb-3">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-1">Services</div>
-                    <h2 className="font-display text-2xl font-extrabold tracking-tight">Choose your service</h2>
-                  </div>
-                  <div className="text-sm text-[#6B7280]">Tap a service row to prefill the booking form</div>
-                </div>
-                <div className="space-y-3">
-                  {services.map((service) => {
-                    const active = service.id === selectedService?.id;
-                    return (
-                      <button
-                        key={service.id}
-                        type="button"
-                        onClick={() => openServiceDetail(service)}
-                        className={`w-full text-left rounded-[1.25rem] overflow-hidden border transition bg-white shadow-[0_12px_30px_-24px_rgba(15,23,42,0.32)] ${active ? "border-[#111827] ring-2 ring-[#111827]" : "border-[#E5E7EB] hover:border-[#94A3B8]"}`}
-                      >
-                        <div className="flex items-stretch">
-                          <div className="w-28 sm:w-36 h-28 sm:h-32 shrink-0 bg-[#0F172A] relative">
-                            {service.image_url ? <img src={service.image_url} alt={service.name} className="absolute inset-0 w-full h-full object-cover" /> : <div className="absolute inset-0 bg-[linear-gradient(135deg,#0F172A,#475569)]" />}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-                          </div>
-                          <div className="flex-1 p-4 sm:p-5 flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                              <div className="font-display text-xl sm:text-2xl font-extrabold tracking-tight text-[#111827] truncate">{service.name}</div>
-                              <div className="mt-1 text-xs uppercase tracking-wider text-[#6B7280]">{service.duration_mins || 30} mins</div>
-                              <p className="mt-2 text-sm text-[#374151] line-clamp-2">{service.description || (isSalon ? "A polished service designed for a premium salon experience." : "A premium appointment option for your customers.")}</p>
-                            </div>
-                            <div className="text-right shrink-0">
-                              <div className="text-[10px] uppercase tracking-wider text-[#6B7280]">Price</div>
-                              <div className="font-display text-2xl sm:text-3xl font-extrabold text-[#111827]">₹{Number(service.price || 0).toLocaleString()}</div>
-                            </div>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <form onSubmit={submit} className="lg:sticky lg:top-6 bg-white/92 backdrop-blur border border-white shadow-[0_30px_80px_-42px_rgba(15,23,42,0.45)] rounded-[2rem] p-4 sm:p-6">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-2">Book {serviceLabel}</div>
-            <h2 className="font-display text-3xl font-extrabold tracking-tighter mb-2">Get your token.</h2>
-            <p className="text-sm text-[#6B7280] mb-6">Walk-ins and online bookings use the same queue, so your staff can manage everything in one place.</p>
-            <div className="space-y-4">
-              <div><Label className="text-xs uppercase tracking-wider text-[#6B7280]">Your name</Label>
-                <Input value={form.patient_name} onChange={(e) => setForm({ ...form, patient_name: e.target.value })} required className="rounded-2xl" data-testid="book-name" /></div>
-              <div><Label className="text-xs uppercase tracking-wider text-[#6B7280]">Phone</Label>
-                <Input value={form.patient_phone} onChange={(e) => setForm({ ...form, patient_phone: e.target.value })} required className="rounded-2xl" data-testid="book-phone" />
-                <div className="mt-1 text-xs text-[#6B7280]">Used as your booking reference.</div>
-              </div>
-              {bookingLocations.length > 0 ? (
-                <div>
-                  <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Location</Label>
-                  <select
-                    value={form.booking_location || ""}
-                    onChange={(e) => setForm({ ...form, booking_location: e.target.value, booking_device_id: "" })}
-                    className="w-full h-11 rounded-2xl border border-[#D1D5DB] bg-white px-4 text-sm"
-                  >
-                    <option value="">Default location</option>
-                    {bookingLocations.map((location) => <option key={location} value={location}>{location}</option>)}
-                  </select>
-                </div>
-              ) : null}
-              {bookingDevices.length > 0 ? (
-                <div>
-                  <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Screen (optional)</Label>
-                  <select
-                    value={form.booking_device_id || ""}
-                    onChange={(e) => setForm({ ...form, booking_device_id: e.target.value })}
-                    className="w-full h-11 rounded-2xl border border-[#D1D5DB] bg-white px-4 text-sm"
-                  >
-                    <option value="">Auto route by location</option>
-                    {bookingDevices
-                      .filter((item) => !form.booking_location || String(item.location || "") === String(form.booking_location || ""))
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>{item.name}{item.location ? ` · ${item.location}` : ""}</option>
-                      ))}
-                  </select>
-                </div>
-              ) : null}
-              <div><Label className="text-xs uppercase tracking-wider text-[#6B7280]">Available slot</Label>
-                <select
-                  value={form.preferred_time}
-                  onChange={(e) => setForm({ ...form, preferred_time: e.target.value })}
-                  className="w-full h-11 rounded-2xl border border-[#D1D5DB] bg-white px-4 text-sm"
-                >
-                  {availableSlots.length === 0 ? <option value="">No slots available</option> : null}
-                  {availableSlots.map((slot) => <option key={slot} value={slot}>{slot}</option>)}
-                </select>
-                <div className="mt-2 text-xs text-[#6B7280]">Choose a free slot. If it gets taken before confirmation, we’ll move you to the next available time. Timezone: {doc?.timezone || "Asia/Kolkata"}.</div></div>
-              {services.length > 0 ? (
-                <div>
-                  <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Services</Label>
-                  <div className="mt-2 max-h-44 overflow-y-auto rounded-2xl border border-[#D1D5DB] bg-white p-2 space-y-1.5">
-                    {services.map((service) => {
-                      const checked = form.service_ids.includes(service.id);
-                      return (
-                        <label key={service.id} className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2 cursor-pointer border ${checked ? "border-[#111827] bg-[#F9FAFB]" : "border-transparent hover:bg-[#F9FAFB]"}`}>
-                          <span className="flex items-center gap-2 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                const next = e.target.checked
-                                  ? [...new Set([...form.service_ids, service.id])]
-                                  : form.service_ids.filter((sid) => sid !== service.id);
-                                const selectedItems = services.filter((item) => next.includes(item.id));
-                                setForm((prev) => ({
-                                  ...prev,
-                                  service_ids: next,
-                                  service_id: next[0] || "",
-                                  service_name: selectedItems.map((item) => item.name).join(" + "),
-                                  service_price: selectedItems.reduce((sum, item) => sum + Number(item.price || 0), 0),
-                                }));
-                              }}
-                            />
-                            <span className="text-sm truncate">{service.name}</span>
-                          </span>
-                          <span className="text-sm font-semibold">₹{Number(service.price || 0).toLocaleString()}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-2 text-xs text-[#6B7280]">Select one or more services. Total duration affects your suggested slot.</div>
-                </div>
-              ) : (
-                <div><Label className="text-xs uppercase tracking-wider text-[#6B7280]">Service</Label>
-                  <Input value={form.service_name} onChange={(e) => setForm({ ...form, service_name: e.target.value })} placeholder={isSalon ? "Haircut" : "General consultation"} className="rounded-2xl" /></div>
-              )}
-              <div><Label className="text-xs uppercase tracking-wider text-[#6B7280]">Note (optional)</Label>
-                <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={3} className="rounded-2xl" data-testid="book-notes" /></div>
-            </div>
-            <Button type="submit" disabled={busy || !isOpen} className="w-full mt-6 rounded-2xl bg-[#111827] hover:bg-[#374151] text-white shadow-lg shadow-[#111827]/20" data-testid="book-submit">
-              {busy ? "Booking..." : isOpen ? "Confirm booking →" : "Currently closed"}
-            </Button>
-            <div className="mt-4 text-xs text-[#6B7280] text-center">You’ll receive a token after confirmation.</div>
-          </form>
-        </section>
-      </main>
-    </div>
+  return (
+    <>
+      <BookingAuthDialog open={authOpen} onOpenChange={setAuthOpen} mode={authMode} setMode={setAuthMode} onLogin={handleCustomerLogin} onSignup={handleCustomerSignup} />
+      <PublicSalonDoctor
+        doc={doc}
+        profile={profile}
+        services={services}
+        isSalon={isSalon}
+        isOpen={isOpen}
+        currentlyServingToken={currentlyServingToken}
+        approxWaitMinutes={approxWaitMinutes}
+        queueLength={doc?.queue_length || filteredQueuePreview.length}
+        form={form}
+        setForm={setForm}
+        submit={submit}
+        busy={busy}
+        availableSlots={availableSlots}
+        bookingLocations={bookingLocations}
+        bookingDevices={bookingDevices}
+        selectedServices={selectedServices}
+        selectedService={selectedService}
+        customer={customer}
+        onLoginOpen={() => { setAuthMode("login"); setAuthOpen(true); }}
+        onSignupOpen={() => { setAuthMode("signup"); setAuthOpen(true); }}
+        onLogout={handleCustomerLogout}
+        activeBookings={activeBookings}
+        detailItem={detailItem}
+        openServiceDetail={openServiceDetail}
+        closeDetail={closeDetail}
+        selectServiceForBooking={selectServiceForBooking}
+        justBooked={justBooked}
+        confirmed={confirmed}
+        setJustBooked={setJustBooked}
+        timezone={doc?.timezone}
+        clientId={clientId}
+        apiBase={apiBase}
+        branchId={branchId}
+      />
+    </>
   );
 }

@@ -25,6 +25,8 @@ import ClientPlaylists from "./pages/client/ClientPlaylists";
 import ClientSchedules from "./pages/client/ClientSchedules";
 import ClientPayments from "./pages/client/ClientPayments";
 import PublicBooking from "./pages/PublicBooking";
+import PublicStore from "./pages/store/PublicStore";
+import CustomDomainEntry from "./pages/CustomDomainEntry";
 import Home from "./pages/Home";
 // Use the new SignagePlayer implementation in its own folder (includes pairing UI)
 import SignagePlayer from "./pages/SignagePlayer/SignagePlayer";
@@ -58,6 +60,21 @@ function ProtectedRoute({ role, children }) {
   return children;
 }
 
+const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+
+function isCustomBookingHost() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname.toLowerCase();
+  return host && !PLATFORM_HOSTS.has(host);
+}
+
+function RootRoute() {
+  if (isCustomBookingHost()) {
+    return <CustomDomainEntry />;
+  }
+  return <HomeRoute />;
+}
+
 function HomeRoute() {
   const { user, loading } = useAuth();
   if (isNativePlayerShell()) {
@@ -88,13 +105,27 @@ export default function App() {
     );
   }
 
+  if (isCustomBookingHost()) {
+    return (
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/*" element={<CustomDomainEntry />} />
+          </Routes>
+          <Toaster position="top-right" />
+        </BrowserRouter>
+      </AuthProvider>
+    );
+  }
+
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<HomeRoute />} />
+          <Route path="/" element={<RootRoute />} />
           <Route path="/login" element={<Login />} />
           <Route path="/book/:clientId" element={<PublicBooking />} />
+          <Route path="/store/:clientRef/*" element={<PublicStore />} />
           <Route path="/play/:pairCode" element={<SignagePlayer />} />
           <Route path="/play" element={<SignagePlayer />} />
 

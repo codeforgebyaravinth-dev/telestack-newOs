@@ -4,6 +4,24 @@ const RAW_BASE = (process.env.REACT_APP_BACKEND_URL || "https://rpsignage.com").
 const BASE = RAW_BASE.replace(/\/api$/, "");
 export const API_BASE = `${BASE}/api`;
 
+/** Turn stored media paths into absolute backend URLs for <img src>. */
+export function resolveMediaUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (/^data:/i.test(trimmed)) return trimmed;
+
+  const serveMatch = trimmed.match(/\/api\/media\/serve\/([^/?#]+)/i);
+  if (serveMatch) {
+    return `${API_BASE}/media/serve/${serveMatch[1]}`;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  if (trimmed.startsWith("/")) return `${BASE}${trimmed}`;
+  return `${BASE}/${trimmed}`;
+}
+
 export const api = axios.create({
   baseURL: API_BASE,
   withCredentials: true,

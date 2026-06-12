@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
-import { Plus, MoreVertical, Pencil, Trash2, Wallet, Search, FileVideo, Pause, Play } from "lucide-react";
+import { Plus, MoreVertical, Pencil, Trash2, Wallet, Search, FileVideo, Pause, Play, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { formatDateTime } from "../../lib/utils";
 
@@ -37,14 +37,62 @@ function isValidGst(value) {
   return !text || GST_RE.test(text);
 }
 
+const BOOKING_CNAME_TARGET = "booking.rpsignage.com";
+
 const empty = {
   name: "", email: "", password: "", phone: "", gst_number: "", address: "",
   plan: "cloud", plan_id: "", vertical: "general", wallet_balance: 0, assigned_template_ids: [],
+  custom_booking_domain: "",
 };
+
+function buildClientPayload(form, isEdit) {
+  const payload = {
+    name: form.name,
+    phone: form.phone || "",
+    gst_number: form.gst_number || "",
+    address: form.address || "",
+    plan: form.plan,
+    vertical: form.vertical,
+    assigned_template_ids: Array.isArray(form.assigned_template_ids) ? form.assigned_template_ids : [],
+    custom_booking_domain: String(form.custom_booking_domain || "").trim(),
+  };
+  if (form.plan_id) payload.plan_id = form.plan_id;
+  if (!isEdit) {
+    payload.email = form.email;
+    payload.password = form.password;
+    payload.wallet_balance = Number(form.wallet_balance || 0);
+  } else if (form.password) {
+    payload.password = form.password;
+  }
+  return payload;
+}
+
+function DomainStatusBadge({ status }) {
+  const value = status || "none";
+  const styles = {
+    none: "bg-[#F3F4F6] text-[#6B7280]",
+    pending: "bg-amber-50 text-amber-700",
+    dns_verified: "bg-sky-50 text-sky-700",
+    active: "bg-emerald-50 text-emerald-700",
+    failed: "bg-red-50 text-red-700",
+  };
+  const labels = {
+    none: "Not set",
+    pending: "DNS pending",
+    dns_verified: "SSL pending",
+    active: "Live",
+    failed: "Failed",
+  };
+  return (
+    <span className={`inline-flex rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${styles[value] || styles.none}`}>
+      {labels[value] || value}
+    </span>
+  );
+}
 
 
 const VERTICALS = [
-  { value: "general", label: "General signage" },
+  { value: "general", label: "Academy / tuition / training" },
   { value: "doctor", label: "Doctor / Clinic" },
   { value: "salon", label: "Salon / Spa" },
   { value: "retailer", label: "Retailer" },
@@ -65,6 +113,8 @@ export default function DealerClients() {
   const [assignOpen, setAssignOpen] = useState(null);
   const [assignIds, setAssignIds] = useState([]);
   const [errors, setErrors] = useState({});
+
+  const verticalPlans = plans.filter((p) => (p.vertical || "general") === (form.vertical || "general"));
 
   const load = async () => {
     try {
@@ -91,14 +141,10 @@ export default function DealerClients() {
     if (Object.keys(nextErrors).length > 0) return;
     try {
       if (editing) {
-        const payload = { ...form };
-        delete payload.wallet_balance;
-        if (!payload.password) delete payload.password;
-        delete payload.email;
-        await api.put(`/dealer/clients/${editing.id}`, payload);
+        await api.put(`/dealer/clients/${editing.id}`, buildClientPayload(form, true));
         toast.success("Client updated");
       } else {
-        await api.post("/dealer/clients", form);
+        await api.post("/dealer/clients", buildClientPayload(form, false));
         toast.success("Client created");
       }
       setOpen(false); load();
@@ -130,6 +176,19 @@ export default function DealerClients() {
   const setStatus = async (c, status) => {
     try { await api.put(`/dealer/clients/${c.id}`, { status }); toast.success(`Status: ${status}`); load(); }
     catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+  };
+
+  const provisionDomain = async (c) => {
+    try {
+      const { data } = await api.post(`/dealer/clients/${c.id}/provision-domain`);
+      const status = data?.custom_booking_domain_status || "pending";
+      if (status === "active") toast.success("Custom domain is live with SSL");
+      else if (status === "dns_verified") toast.message("DNS verified — SSL setup in progress");
+      else toast.message(data?.custom_booking_domain_error || "Domain setup updated");
+      load();
+    } catch (e) {
+      toast.error(formatErr(e.response?.data?.detail));
+    }
   };
 
   const toggleTemplate = (id) => {
@@ -180,6 +239,7 @@ export default function DealerClients() {
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280]">GST</TableHead>
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280]">Plan</TableHead>
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280]">Status</TableHead>
+              <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280] min-w-[220px]">Custom domain</TableHead>
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280] text-center">Templates</TableHead>
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280] text-right">Wallet</TableHead>
               <TableHead className="text-[11px] uppercase tracking-wider text-[#6B7280] w-12"></TableHead>
@@ -187,7 +247,7 @@ export default function DealerClients() {
           </TableHeader>
           <TableBody>
             {filtered.length === 0 && (
-              <TableRow><TableCell colSpan={7} className="text-center py-10 text-sm text-[#6B7280]">No clients yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-10 text-sm text-[#6B7280]">No clients yet.</TableCell></TableRow>
             )}
             {filtered.map((c) => (
               <TableRow key={c.id} data-testid={`client-row-${c.id}`}>
@@ -216,6 +276,29 @@ export default function DealerClients() {
                   )}
                 </TableCell>
                 <TableCell><StatusBadge status={c.status} /></TableCell>
+                <TableCell>
+                  <div className="space-y-1.5">
+                    <div className="font-mono text-xs break-all">{c.custom_booking_domain || ""}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <DomainStatusBadge status={c.custom_booking_domain_status} />
+                      {c.custom_booking_domain && c.custom_booking_domain_status !== "active" && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 rounded-sm px-2 text-xs"
+                          onClick={() => provisionDomain(c)}
+                          data-testid={`provision-domain-${c.id}`}
+                        >
+                          <RefreshCw className="w-3 h-3 mr-1" /> Verify SSL
+                        </Button>
+                      )}
+                    </div>
+                    {c.custom_booking_domain_error && c.custom_booking_domain_status !== "active" && (
+                      <p className="text-[10px] text-[#9CA3AF] leading-snug">{c.custom_booking_domain_error}</p>
+                    )}
+                  </div>
+                </TableCell>
                 <TableCell className="text-center font-mono text-sm">{c.assigned_template_ids?.length || 0}</TableCell>
                 <TableCell className="text-right font-mono">₹ {Number(c.wallet_balance || 0).toLocaleString()}</TableCell>
                 <TableCell>
@@ -303,6 +386,18 @@ export default function DealerClients() {
               />
               {errors.gst_number && <div className="mt-1 text-xs text-red-600">{errors.gst_number}</div>}
             </div>
+            <div className="col-span-2">
+              <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Business vertical</Label>
+              <Select value={form.vertical} onValueChange={(v) => {
+                const planStillValid = !form.plan_id || (plans.find((p) => p.id === form.plan_id)?.vertical || "general") === v;
+                setForm({ ...form, vertical: v, plan_id: planStillValid ? form.plan_id : "" });
+              }}>
+                <SelectTrigger className="rounded-sm" data-testid="client-vertical"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {VERTICALS.map((v) => <SelectItem key={v.value} value={v.value}>{v.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <div>
               <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Subscription plan</Label>
               <Select value={form.plan_id || "__none__"} onValueChange={(v) => {
@@ -313,9 +408,17 @@ export default function DealerClients() {
                 <SelectTrigger className="rounded-sm" data-testid="client-subscription-plan"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">No subscription (choose plan type)</SelectItem>
-                  {plans.map((p) => <SelectItem key={p.id} value={p.id}>{p.name} — ₹{p.price}{p.billing_cycle ? `/${p.billing_cycle}` : ''}</SelectItem>)}
+                  {verticalPlans.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} — ₹{p.price}{p.billing_cycle ? `/${p.billing_cycle}` : ""}
+                      {Number(p.device_limit || 0) > 0 ? ` · ${p.device_limit} screens` : " · Unlimited screens"}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {verticalPlans.length === 0 && (
+                <p className="mt-1 text-xs text-amber-700">No subscription plans for this vertical yet. Ask admin to create one.</p>
+              )}
             </div>
             <div>
               <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Plan</Label>
@@ -327,17 +430,31 @@ export default function DealerClients() {
               </Select>
             </div>
             <div className="col-span-2">
-              <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Business vertical</Label>
-              <Select value={form.vertical} onValueChange={(v) => setForm({ ...form, vertical: v })}>
-                <SelectTrigger className="rounded-sm" data-testid="client-vertical"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {VERTICALS.map((v) => <SelectItem key={v.value} value={v.value}>{v.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="col-span-2">
               <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Address</Label>
               <Textarea value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="rounded-sm" rows={2} data-testid="client-address" />
+            </div>
+            <div className="col-span-2">
+              <Label className="text-xs uppercase tracking-wider text-[#6B7280]">Custom booking domain</Label>
+              <Input
+                value={form.custom_booking_domain || ""}
+                onChange={(e) => setForm({ ...form, custom_booking_domain: e.target.value })}
+                placeholder="book.yourclinic.com"
+                className="rounded-sm font-mono text-sm"
+                data-testid="client-custom-domain"
+              />
+              <p className="mt-1.5 text-[11px] text-[#9CA3AF] leading-relaxed">
+                Point a CNAME to <span className="font-mono text-[#6B7280]">{BOOKING_CNAME_TARGET}</span>. The domain is saved here; DNS and SSL are verified automatically on the production Docker server.
+              </p>
+              {editing?.custom_booking_domain_status && (
+                <div className="mt-2 flex items-center gap-2">
+                  <DomainStatusBadge status={editing.custom_booking_domain_status} />
+                  {editing.custom_booking_domain && editing.custom_booking_domain_status !== "active" && (
+                    <Button type="button" variant="outline" size="sm" className="h-7 rounded-sm text-xs" onClick={() => provisionDomain(editing)}>
+                      <RefreshCw className="w-3 h-3 mr-1" /> Verify SSL
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
             {!editing && (
               <div className="col-span-2">

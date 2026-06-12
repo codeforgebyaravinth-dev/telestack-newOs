@@ -11,9 +11,11 @@ import os
 import logging
 import uuid
 import re
+import socket
+import subprocess
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal, Dict, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
 
 import bcrypt
@@ -53,6 +55,13 @@ public_api = APIRouter(prefix="/api/public")
 JWT_ALGO = "HS256"
 PLAN_TYPES = ("cloud", "usb", "hybrid")
 VERTICALS = ("general", "doctor", "salon", "retailer", "society")
+
+
+def _normalize_vertical(value: Optional[str]) -> str:
+    text = str(value or "general").strip().lower()
+    return text if text in VERTICALS else "general"
+
+
 WEATHER_CACHE: Dict[str, Dict[str, Any]] = {}
 APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
 REDIS_URL = os.environ.get("REDIS_URL", "").strip()
@@ -155,7 +164,7 @@ async def _redis_event_dispatcher():
                 except Exception:
                     pass
                 await queue_ws_manager.broadcast(client_id, payload, branch_id=branch_id)
-            elif kind == "content_refresh":
+            elif kind in {"content_refresh", "player_settings_update"}:
                 await content_ws_manager.broadcast(client_id, payload, branch_id=branch_id)
     finally:
         try:
@@ -211,6 +220,78 @@ async def _broadcast_content_refresh(client_id: str, reason: str = "update", bra
             await content_ws_manager.broadcast(client_id, payload, branch_id=branch_id)
 
         await _redis_publish("content_refresh", client_id, payload, branch_id=branch_id)
+
+
+async def _broadcast_player_settings_update(
+    client_id: str,
+    device_id: str,
+    settings: dict,
+    branch_id: Optional[str] = None,
+):
+    if not client_id or not device_id:
+        return
+    payload = {
+        "type": "player_settings_update",
+        "client_id": client_id,
+        "device_id": device_id,
+        "settings": settings,
+        "timestamp": now_iso(),
+        "sent_at": now_iso(),
+        "branch_id": branch_id or "",
+    }
+    try:
+        asyncio.create_task(content_ws_manager.broadcast(client_id, payload, branch_id=branch_id))
+    except Exception:
+        await content_ws_manager.broadcast(client_id, payload, branch_id=branch_id)
+    await _redis_publish("player_settings_update", client_id, payload, branch_id=branch_id)
+
+
+def _normalize_player_settings(raw: Optional[dict] = None) -> dict:
+    base = {**DEFAULT_PLAYER_SETTINGS}
+    if not isinstance(raw, dict):
+        return base
+    hidden = raw.get("hidden_zone_ids")
+    if isinstance(hidden, list):
+        base["hidden_zone_ids"] = [str(z) for z in hidden if str(z).strip()]
+    if isinstance(raw.get("fill_blank_spaces"), bool):
+        base["fill_blank_spaces"] = raw["fill_blank_spaces"]
+    if isinstance(raw.get("custom_placement_enabled"), bool):
+        base["custom_placement_enabled"] = raw["custom_placement_enabled"]
+    if isinstance(raw.get("zone_placements"), dict):
+        base["zone_placements"] = {str(k): str(v) for k, v in raw["zone_placements"].items() if str(k).strip()}
+    if isinstance(raw.get("zone_media_modes"), dict):
+        base["zone_media_modes"] = {str(k): str(v) for k, v in raw["zone_media_modes"].items() if str(k).strip()}
+    return base
+
+
+async def _resolve_device_zone_defs(device: dict) -> list:
+    chosen_playlist = None
+    if device.get("playlist_id"):
+        chosen_playlist = await db.playlists.find_one(
+            {"id": device["playlist_id"], "client_id": device["client_id"]},
+            {"_id": 0, "template_id": 1},
+        )
+    effective_template_id = str((chosen_playlist or {}).get("template_id") or device.get("template_id") or "")
+    zone_defs = []
+    if effective_template_id:
+        template = await db.templates.find_one({"id": effective_template_id}, {"_id": 0, "layout": 1})
+        if template:
+            zone_defs = template.get("layout", {}).get("zones", []) or []
+            if not zone_defs:
+                layout = template.get("layout", {})
+                if layout.get("main"):
+                    zone_defs.append({"id": "main", "name": layout.get("main", "Main")})
+                if layout.get("sidebar"):
+                    zone_defs.append({"id": "sidebar", "name": layout.get("sidebar", "Sidebar")})
+                if layout.get("ticker"):
+                    zone_defs.append({"id": "ticker", "name": layout.get("ticker", "Ticker")})
+    if not zone_defs:
+        zone_defs = [
+            {"id": "main", "name": "Main"},
+            {"id": "sidebar", "name": "Sidebar"},
+            {"id": "ticker", "name": "Ticker"},
+        ]
+    return zone_defs
 
 
 async def _build_queue_announcement_snapshot(client_id: str, branch_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -354,10 +435,14 @@ def verify_password(pw: str, hashed: str) -> bool:
 
 def jwt_secret() -> str: return os.environ["JWT_SECRET"]
 
-def create_access_token(uid: str, email: str, role: str) -> str:
-    return jwt.encode({"sub": uid, "email": email, "role": role, "type": "access",
-                       "exp": datetime.now(timezone.utc) + timedelta(hours=12)},
-                      jwt_secret(), algorithm=JWT_ALGO)
+def create_access_token(uid: str, email: str, role: str, extra: Optional[Dict[str, Any]] = None) -> str:
+    payload: Dict[str, Any] = {
+        "sub": uid, "email": email, "role": role, "type": "access",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=12),
+    }
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, jwt_secret(), algorithm=JWT_ALGO)
 
 def create_refresh_token(uid: str) -> str:
     return jwt.encode({"sub": uid, "type": "refresh",
@@ -452,6 +537,8 @@ class PlanIn(BaseModel):
     billing_cycle: Literal["monthly", "yearly", "custom"] = "monthly"
     price: float = 0.0
     storage_limit_gb: float = 0.0
+    device_limit: int = Field(default=0, ge=0)
+    vertical: Literal["general", "doctor", "salon", "retailer", "society"] = "general"
     duration_days: Optional[int] = None
     description: str = ""
     features: List[str] = []
@@ -462,6 +549,8 @@ class PlanUpdate(BaseModel):
     billing_cycle: Optional[Literal["monthly", "yearly", "custom"]] = None
     price: Optional[float] = None
     storage_limit_gb: Optional[float] = None
+    device_limit: Optional[int] = Field(default=None, ge=0)
+    vertical: Optional[Literal["general", "doctor", "salon", "retailer", "society"]] = None
     duration_days: Optional[int] = None
     description: Optional[str] = None
     features: Optional[List[str]] = None
@@ -526,6 +615,7 @@ class ClientCreate(BaseModel):
     vertical: Literal["general", "doctor", "salon", "retailer", "society"] = "general"
     wallet_balance: float = 0.0
     assigned_template_ids: List[str] = []
+    custom_booking_domain: Optional[str] = None
 
 class ClientUpdate(BaseModel):
     name: Optional[str] = None; email: Optional[EmailStr] = None
@@ -538,6 +628,7 @@ class ClientUpdate(BaseModel):
     assigned_template_ids: Optional[List[str]] = None
     status: Optional[Literal["active", "suspended", "pending"]] = None
     dealer_id: Optional[str] = None
+    custom_booking_domain: Optional[str] = None
 
 class CreditIn(BaseModel):
     amount: float
@@ -666,6 +757,25 @@ class DeviceUpdate(BaseModel):
     orientation: Optional[Literal["auto", "landscape", "portrait"]] = None
     brightness: Optional[int] = None
 
+
+DEFAULT_PLAYER_SETTINGS: Dict[str, Any] = {
+    "hidden_zone_ids": [],
+    "fill_blank_spaces": True,
+    "custom_placement_enabled": False,
+    "zone_placements": {},
+    "zone_media_modes": {},
+}
+
+
+class PlayerSettingsUpdate(BaseModel):
+    hidden_zone_ids: Optional[List[str]] = None
+    fill_blank_spaces: Optional[bool] = None
+    custom_placement_enabled: Optional[bool] = None
+    zone_placements: Optional[Dict[str, str]] = None
+    zone_media_modes: Optional[Dict[str, str]] = None
+    orientation: Optional[Literal["auto", "landscape", "portrait"]] = None
+    brightness: Optional[int] = None
+
 # Doctor models
 class ServiceItem(BaseModel):
     id: Optional[str] = None
@@ -720,12 +830,148 @@ class ClinicVisitCreate(BaseModel):
     follow_up_on: Optional[str] = None
 
 # Retailer
+class StoreBannerSlide(BaseModel):
+    id: str = ""
+    image_url: str = ""
+    title: str = ""
+    subtitle: str = ""
+    link_url: str = ""
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class RetailerProfile(BaseModel):
+    headline: str = ""
+    description: str = ""
+    hours: str = ""
+    is_open: bool = True
+    image_url: str = ""
+    announcement: str = ""
+    banner_slides: List[StoreBannerSlide] = Field(default_factory=list)
+
+
+class GeneralProfile(BaseModel):
+    headline: str = ""
+    tagline: str = ""
+    description: str = ""
+    hours: str = ""
+    is_open: bool = True
+    image_url: str = ""
+    announcement: str = ""
+    sector: Literal["tuition", "academy", "coaching", "training", "workshops", "other"] = "academy"
+    highlights: List[str] = Field(default_factory=list)
+    banner_slides: List[StoreBannerSlide] = Field(default_factory=list)
+
+
+class CourseIn(BaseModel):
+    name: str
+    description: str = ""
+    price: float = 0.0
+    duration: str = ""
+    schedule: str = ""
+    mode: Literal["online", "offline", "hybrid"] = "offline"
+    level: Literal["beginner", "intermediate", "advanced", "all"] = "all"
+    category: str = ""
+    image_url: str = ""
+    seats: int = 0
+    tags: List[str] = Field(default_factory=list)
+    is_published: bool = True
+
+
+class CourseUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    duration: Optional[str] = None
+    schedule: Optional[str] = None
+    mode: Optional[Literal["online", "offline", "hybrid"]] = None
+    level: Optional[Literal["beginner", "intermediate", "advanced", "all"]] = None
+    category: Optional[str] = None
+    image_url: Optional[str] = None
+    seats: Optional[int] = None
+    tags: Optional[List[str]] = None
+    is_published: Optional[bool] = None
+
+
+class CourseEnrollIn(BaseModel):
+    course_id: str
+    student_name: str
+    student_phone: str
+    student_email: str = ""
+    notes: str = ""
+    preferred_batch: str = ""
+
+
+class EnrollmentStatusIn(BaseModel):
+    status: Literal["pending", "confirmed", "cancelled", "completed"]
+
+
 class ProductIn(BaseModel):
-    name: str; price: float; sku: str = ""; description: str = ""; image_url: str = ""; stock: int = 0
+    name: str
+    price: float
+    sku: str = ""
+    description: str = ""
+    image_url: str = ""
+    image_urls: List[str] = Field(default_factory=list)
+    category_id: Optional[str] = None
+    stock: int = 0
+    tags: List[str] = Field(default_factory=list)
+    is_published: bool = True
+    compare_at_price: Optional[float] = None
 
 class ProductUpdate(BaseModel):
-    name: Optional[str] = None; price: Optional[float] = None; sku: Optional[str] = None
-    description: Optional[str] = None; image_url: Optional[str] = None; stock: Optional[int] = None
+    name: Optional[str] = None
+    price: Optional[float] = None
+    sku: Optional[str] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    image_urls: Optional[List[str]] = None
+    category_id: Optional[str] = None
+    stock: Optional[int] = None
+    tags: Optional[List[str]] = None
+    is_published: Optional[bool] = None
+    compare_at_price: Optional[float] = None
+
+class CategoryIn(BaseModel):
+    name: str
+    parent_id: Optional[str] = None
+    sort_order: int = 0
+    is_active: bool = True
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class ShopperSignupIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str = ""
+    phone: str = ""
+
+class ShopperLoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class CartItemIn(BaseModel):
+    product_id: str
+    qty: int = Field(default=1, ge=1, le=99)
+
+class CartItemUpdate(BaseModel):
+    qty: int = Field(ge=1, le=99)
+
+class OrderCreateIn(BaseModel):
+    shipping_name: str = ""
+    shipping_phone: str = ""
+    shipping_line1: str = ""
+    shipping_city: str = ""
+    shipping_pincode: str = ""
+    payment_method: Literal["cod", "upi"] = "cod"
+    notes: str = ""
+
+class OrderStatusIn(BaseModel):
+    status: Literal["pending", "confirmed", "shipped", "delivered", "completed", "cancelled"]
 
 # Society
 class RoomIn(BaseModel):
@@ -818,6 +1064,257 @@ async def gen_client_code() -> str:
     num = counter["next"]
     return f"RP-C{num:03d}"
 
+
+async def gen_device_code() -> str:
+    """Generate next device code like DEV-00001."""
+    counter = await db.counters.find_one_and_update(
+        {"_id": "device_code"},
+        {"$inc": {"next": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    num = int(counter.get("next") or 1)
+    return f"DEV-{num:05d}"
+
+
+async def _ensure_device_code(device: dict) -> str:
+    existing = str(device.get("device_code") or "").strip()
+    if existing:
+        return existing
+    code = await gen_device_code()
+    await db.devices.update_one({"id": device["id"]}, {"$set": {"device_code": code}})
+    return code
+
+def _absolute_media_url(url: str) -> str:
+    if not url:
+        return ""
+    text = str(url).strip()
+    serve_match = re.search(r"/api/media/serve/([^/?#]+)", text, re.I)
+    if serve_match:
+        media_id = serve_match.group(1)
+        api_public = (os.environ.get("API_PUBLIC_URL") or os.environ.get("REACT_APP_BACKEND_URL") or "").rstrip("/")
+        if api_public:
+            api_public = re.sub(r"/api/?$", "", api_public, flags=re.I)
+            return f"{api_public}/api/media/serve/{media_id}"
+        if PUBLIC_APP_URL:
+            return f"{PUBLIC_APP_URL.rstrip('/')}/api/media/serve/{media_id}"
+        return f"/api/media/serve/{media_id}"
+    if text.startswith("/") and PUBLIC_APP_URL:
+        return f"{PUBLIC_APP_URL.rstrip('/')}{text}"
+    return text
+
+def _hydrate_banner_slides(slides: Optional[List[dict]]) -> List[dict]:
+    if not slides:
+        return []
+    active = []
+    for raw in slides:
+        if not isinstance(raw, dict) or not raw.get("is_active", True):
+            continue
+        image_url = _absolute_media_url(str(raw.get("image_url") or "").strip())
+        if not image_url:
+            continue
+        active.append({
+            "id": str(raw.get("id") or ""),
+            "image_url": image_url,
+            "title": str(raw.get("title") or "").strip(),
+            "subtitle": str(raw.get("subtitle") or "").strip(),
+            "link_url": str(raw.get("link_url") or "").strip(),
+            "sort_order": int(raw.get("sort_order") or 0),
+            "is_active": True,
+        })
+    active.sort(key=lambda item: int(item.get("sort_order") or 0))
+    return active
+
+
+def hydrate_course(c: Optional[dict]) -> Optional[dict]:
+    if not c:
+        return c
+    row = dict(c)
+    row["image_url"] = _absolute_media_url(row.get("image_url") or "")
+    return row
+
+
+def hydrate_product(p: Optional[dict]) -> Optional[dict]:
+    if not p:
+        return p
+    urls = [u for u in (p.get("image_urls") or []) if u]
+    if not urls and p.get("image_url"):
+        urls = [p["image_url"]]
+    urls = [_absolute_media_url(u) for u in urls if u]
+    p["image_urls"] = urls
+    p["image_url"] = urls[0] if urls else _absolute_media_url(p.get("image_url") or "")
+    return p
+
+def _category_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug[:64] or "category"
+
+def _product_search_filter(q: str) -> Optional[Dict[str, Any]]:
+    """Multi-word search across product name and tags (every word must match)."""
+    text = (q or "").strip()
+    if not text:
+        return None
+    terms = [re.escape(part) for part in re.split(r"\s+", text) if part.strip()]
+    if not terms:
+        return None
+    clauses: List[Dict[str, Any]] = []
+    for term in terms:
+        clauses.append({
+            "$or": [
+                {"name": {"$regex": term, "$options": "i"}},
+                {"tags": {"$regex": term, "$options": "i"}},
+            ]
+        })
+    return {"$and": clauses} if len(clauses) > 1 else clauses[0]
+
+def _product_search_relevance(product: dict, terms: List[str]) -> int:
+    name = (product.get("name") or "").lower()
+    tag_text = " ".join(str(t) for t in (product.get("tags") or [])).lower()
+    score = 0
+    for raw in terms:
+        term = raw.lower()
+        if name == term:
+            score += 100
+        elif name.startswith(term):
+            score += 50
+        elif term in name:
+            score += 25
+        if any(term == str(tag).lower() for tag in (product.get("tags") or [])):
+            score += 20
+        elif term in tag_text:
+            score += 10
+    return score
+
+async def _resolve_retailer_store(client_ref: str) -> dict:
+    client = await _resolve_public_client_ref(client_ref)
+    if _normalize_vertical(client.get("vertical")) != "retailer":
+        raise HTTPException(status_code=404, detail="Store not found")
+    return client
+
+async def _resolve_booking_provider(client_ref: str) -> dict:
+    client = await _resolve_public_client_ref(client_ref)
+    if client.get("vertical") not in ("doctor", "salon"):
+        raise HTTPException(status_code=404, detail="Booking not available for this provider")
+    return client
+
+async def _optional_public_customer(request: Request, client_id: str) -> Optional[dict]:
+    try:
+        return await get_current_shopper(request, client_id)
+    except HTTPException:
+        return None
+
+async def _register_public_customer(cid: str, body: ShopperSignupIn) -> dict:
+    email = body.email.lower().strip()
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if await db.store_shoppers.find_one({"client_id": cid, "email": email}):
+        raise HTTPException(status_code=400, detail="Email already registered for this provider")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "client_id": cid,
+        "email": email,
+        "password_hash": hash_password(body.password),
+        "name": body.name.strip(),
+        "phone": body.phone.strip(),
+        "created_at": now_iso(),
+    }
+    await db.store_shoppers.insert_one(doc)
+    return doc
+
+async def _login_public_customer(cid: str, body: ShopperLoginIn) -> dict:
+    email = body.email.lower().strip()
+    shopper = await db.store_shoppers.find_one({"client_id": cid, "email": email})
+    if not shopper or not verify_password(body.password, shopper.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return shopper
+
+def _customer_auth_response(shopper: dict, cid: str, response: Response) -> dict:
+    email = shopper["email"]
+    access = create_access_token(shopper["id"], email, "shopper", {"client_id": cid, "name": shopper.get("name", "")})
+    refresh = create_refresh_token(shopper["id"])
+    response.set_cookie("shopper_access_token", access, httponly=True, secure=True, samesite="none", max_age=12 * 3600, path="/")
+    return {
+        "shopper": {
+            "id": shopper["id"],
+            "email": email,
+            "name": shopper.get("name", ""),
+            "phone": shopper.get("phone", ""),
+            "client_id": cid,
+        },
+        "access_token": access,
+        "refresh_token": refresh,
+    }
+
+async def get_current_shopper(request: Request, client_id: str) -> dict:
+    token = request.cookies.get("shopper_access_token")
+    if not token:
+        h = request.headers.get("Authorization", "")
+        if h.startswith("Bearer "):
+            token = h[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, jwt_secret(), algorithms=[JWT_ALGO])
+        if payload.get("type") != "access" or payload.get("role") != "shopper":
+            raise HTTPException(status_code=401, detail="Invalid token")
+        if payload.get("client_id") != client_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        shopper = await db.store_shoppers.find_one(
+            {"id": payload["sub"], "client_id": client_id},
+            {"_id": 0, "password_hash": 0},
+        )
+        if not shopper:
+            raise HTTPException(status_code=401, detail="Shopper not found")
+        return shopper
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_shopper(client_id: str):
+    async def _w(request: Request) -> dict:
+        return await get_current_shopper(request, client_id)
+    return _w
+
+async def gen_order_no(client_id: str) -> str:
+    counter = await db.counters.find_one_and_update(
+        {"_id": f"order_{client_id}"},
+        {"$inc": {"next": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    return f"ORD-{counter['next']:05d}"
+
+async def _get_or_create_cart(client_id: str, shopper_id: str) -> dict:
+    cart = await db.carts.find_one({"client_id": client_id, "shopper_id": shopper_id}, {"_id": 0})
+    if cart:
+        return cart
+    cart = {"id": str(uuid.uuid4()), "client_id": client_id, "shopper_id": shopper_id, "items": [], "updated_at": now_iso()}
+    await db.carts.insert_one(cart)
+    return cart
+
+async def _hydrate_cart_items(client_id: str, items: List[dict]) -> List[dict]:
+    hydrated = []
+    for item in items or []:
+        product = await db.products.find_one({"id": item.get("product_id"), "client_id": client_id}, {"_id": 0})
+        if not product:
+            continue
+        product = hydrate_product(product)
+        qty = int(item.get("qty") or 1)
+        unit_price = float(product.get("price") or 0)
+        hydrated.append({
+            "product_id": product["id"],
+            "name": product.get("name") or "",
+            "sku": product.get("sku") or "",
+            "qty": qty,
+            "unit_price": unit_price,
+            "line_total": round(unit_price * qty, 2),
+            "image_url": product.get("image_url") or "",
+            "stock": int(product.get("stock") or 0),
+            "is_published": product.get("is_published", True),
+        })
+    return hydrated
+
 async def hydrate_client(c: dict) -> dict:
     if not c: return c
     c.pop("_id", None); c.pop("password_hash", None)
@@ -827,6 +1324,9 @@ async def hydrate_client(c: dict) -> dict:
     c["public_booking_slug"] = _slugify_public_ref(c.get("name", ""))
     c.setdefault("doctor_profile", {"services": []})
     c.setdefault("salon_profile", {"services": []})
+    c.setdefault("retailer_profile", {})
+    c.setdefault("general_profile", {})
+    c["vertical"] = _normalize_vertical(c.get("vertical"))
     return c
 
 
@@ -869,8 +1369,364 @@ async def _resolve_public_client_ref(ref: str) -> dict:
     raise HTTPException(status_code=404, detail="Provider not found")
 
 
+_BOOKING_DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
+BOOKING_DOMAIN_CNAME_TARGET = os.environ.get("BOOKING_DOMAIN_CNAME_TARGET", "booking.rpsignage.com").strip().lower()
+BOOKING_DOMAIN_TARGET_IP = os.environ.get("BOOKING_DOMAIN_TARGET_IP", "").strip()
+BOOKING_DOMAINS_DIR = os.environ.get("BOOKING_DOMAINS_DIR", "").strip()
+BOOKING_SSL_COMPOSE_ROOT = os.environ.get("BOOKING_SSL_COMPOSE_ROOT", "").strip()
+BOOKING_DOMAIN_AUTO_PROVISION = os.environ.get("BOOKING_DOMAIN_AUTO_PROVISION", "").strip().lower()
+
+
+def _booking_auto_provision_enabled() -> bool:
+    mode = BOOKING_DOMAIN_AUTO_PROVISION
+    if mode in ("0", "false", "no", "off"):
+        return False
+    if mode in ("1", "true", "yes", "on"):
+        return True
+    return bool(BOOKING_DOMAINS_DIR and BOOKING_SSL_COMPOSE_ROOT)
+
+
+def _platform_booking_hosts() -> set:
+    hosts = {"rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"}
+    frontend = os.environ.get("FRONTEND_URL", "")
+    for item in frontend.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            host = urlparse(item if "://" in item else f"https://{item}").hostname
+            if host:
+                hosts.add(host.lower())
+        except Exception:
+            pass
+    return hosts
+
+
+def _normalize_booking_domain(value: Optional[str]) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = text.split("://", 1)[-1]
+    text = text.split("/", 1)[0]
+    text = text.split(":", 1)[0]
+    return text.strip(".")
+
+
+def _validate_booking_domain_hostname(domain: str) -> None:
+    if not domain:
+        return
+    if not _BOOKING_DOMAIN_RE.match(domain):
+        raise HTTPException(status_code=400, detail="Enter a valid domain like book.yourclinic.com")
+    if domain in _platform_booking_hosts():
+        raise HTTPException(status_code=400, detail="That domain is reserved for the platform")
+
+
+async def _assert_booking_domain_available(domain: str, exclude_client_id: Optional[str] = None) -> None:
+    if not domain:
+        return
+    query: Dict[str, Any] = {"custom_booking_domain": domain}
+    if exclude_client_id:
+        query["id"] = {"$ne": exclude_client_id}
+    existing = await db.clients.find_one(query, {"_id": 0, "id": 1, "name": 1})
+    if existing:
+        raise HTTPException(status_code=400, detail="That custom domain is already assigned to another client")
+
+
+def _resolve_booking_domain_dns(domain: str) -> dict:
+    if not domain:
+        return {"ok": False, "detail": "Domain is required"}
+    try:
+        infos = socket.getaddrinfo(domain, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        return {"ok": False, "detail": f"DNS lookup failed: {exc}"}
+    ips = sorted({item[4][0] for item in infos if item and item[4]})
+    if BOOKING_DOMAIN_TARGET_IP:
+        if BOOKING_DOMAIN_TARGET_IP in ips:
+            return {"ok": True, "detail": "A record points to the platform", "ips": ips}
+        return {
+            "ok": False,
+            "detail": f"Point an A record for {domain} to {BOOKING_DOMAIN_TARGET_IP}",
+            "ips": ips,
+        }
+    target_ips: set = set()
+    if BOOKING_DOMAIN_CNAME_TARGET:
+        try:
+            target_infos = socket.getaddrinfo(BOOKING_DOMAIN_CNAME_TARGET, None, proto=socket.IPPROTO_TCP)
+            target_ips = {item[4][0] for item in target_infos if item and item[4]}
+        except socket.gaierror:
+            target_ips = set()
+    if target_ips and target_ips.intersection(ips):
+        return {"ok": True, "detail": f"DNS resolves to the platform ({BOOKING_DOMAIN_CNAME_TARGET})", "ips": ips}
+    if BOOKING_DOMAIN_CNAME_TARGET:
+        return {
+            "ok": False,
+            "detail": f"Add a CNAME from {domain} to {BOOKING_DOMAIN_CNAME_TARGET} (or an A record to the platform IP)",
+            "ips": ips,
+        }
+    return {"ok": True, "detail": "DNS resolves", "ips": ips}
+
+
+def _booking_domain_conf_path(domain: str) -> Optional[Path]:
+    if not BOOKING_DOMAINS_DIR:
+        return None
+    safe = re.sub(r"[^a-z0-9.-]", "", domain.lower())
+    return Path(BOOKING_DOMAINS_DIR) / f"{safe}.conf"
+
+
+def _write_booking_domain_nginx(domain: str, *, ssl: bool) -> bool:
+    path = _booking_domain_conf_path(domain)
+    if not path:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    common_locations = """
+    client_max_body_size 100m;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location /api/ {
+        set $backend_upstream http://backend:8000;
+        proxy_pass $backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+
+    location / {
+        set $frontend_upstream http://frontend:80;
+        proxy_pass $frontend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+"""
+    if ssl:
+        body = f"""server {{
+    listen 80;
+    server_name {domain};
+
+    location /.well-known/acme-challenge/ {{
+        root /var/www/certbot;
+    }}
+
+    location / {{
+        return 301 https://$host$request_uri;
+    }}
+}}
+
+server {{
+    listen 443 ssl http2;
+    server_name {domain};
+{common_locations}
+    ssl_certificate /etc/letsencrypt/live/{domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+}}
+"""
+    else:
+        body = f"""server {{
+    listen 80;
+    server_name {domain};
+{common_locations}
+}}
+"""
+    path.write_text(body, encoding="utf-8")
+    return True
+
+
+def _remove_booking_domain_nginx(domain: str) -> None:
+    path = _booking_domain_conf_path(domain)
+    if path and path.exists():
+        path.unlink(missing_ok=True)
+
+
+def _reload_booking_nginx() -> None:
+    if not BOOKING_SSL_COMPOSE_ROOT:
+        return
+    try:
+        subprocess.run(
+            ["docker", "compose", "exec", "-T", "nginx", "nginx", "-s", "reload"],
+            cwd=BOOKING_SSL_COMPOSE_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except Exception as exc:
+        logger.warning("nginx reload failed: %s", exc)
+
+
+def _issue_booking_domain_cert(domain: str) -> dict:
+    if not BOOKING_SSL_COMPOSE_ROOT:
+        return {"ok": False, "detail": "SSL automation is not configured on the server"}
+    email = os.environ.get("LETSENCRYPT_EMAIL", "").strip()
+    if not email:
+        return {"ok": False, "detail": "LETSENCRYPT_EMAIL is not configured"}
+    cmd = [
+        "docker", "compose", "run", "--rm", "certbot", "certonly",
+        "--webroot", "-w", "/var/www/certbot",
+        "-d", domain,
+        "--email", email,
+        "--agree-tos",
+        "--non-interactive",
+        "--keep-until-expiring",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=BOOKING_SSL_COMPOSE_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except Exception as exc:
+        return {"ok": False, "detail": f"Certificate request failed: {exc}"}
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "certbot failed").strip()
+        return {"ok": False, "detail": detail[:500]}
+    return {"ok": True, "detail": "Certificate issued"}
+
+
+async def _provision_client_booking_domain(domain: str) -> dict:
+    domain = _normalize_booking_domain(domain)
+    if not domain:
+        return {
+            "custom_booking_domain": "",
+            "custom_booking_domain_status": "none",
+            "custom_booking_domain_error": "",
+            "custom_booking_domain_verified_at": None,
+        }
+    _validate_booking_domain_hostname(domain)
+    if not _booking_auto_provision_enabled():
+        return {
+            "custom_booking_domain": domain,
+            "custom_booking_domain_status": "pending",
+            "custom_booking_domain_error": "Domain saved. DNS and SSL run automatically on the production Docker server.",
+            "custom_booking_domain_verified_at": None,
+        }
+    dns = await asyncio.to_thread(_resolve_booking_domain_dns, domain)
+    if not dns.get("ok"):
+        return {
+            "custom_booking_domain": domain,
+            "custom_booking_domain_status": "pending",
+            "custom_booking_domain_error": dns.get("detail", "DNS not configured"),
+            "custom_booking_domain_verified_at": None,
+        }
+    wrote = _write_booking_domain_nginx(domain, ssl=False)
+    if wrote:
+        _reload_booking_nginx()
+    cert = _issue_booking_domain_cert(domain)
+    if cert.get("ok"):
+        if wrote:
+            _write_booking_domain_nginx(domain, ssl=True)
+            _reload_booking_nginx()
+        return {
+            "custom_booking_domain": domain,
+            "custom_booking_domain_status": "active",
+            "custom_booking_domain_error": "",
+            "custom_booking_domain_verified_at": now_iso(),
+        }
+    if wrote:
+        return {
+            "custom_booking_domain": domain,
+            "custom_booking_domain_status": "dns_verified",
+            "custom_booking_domain_error": cert.get("detail", "Waiting for SSL certificate"),
+            "custom_booking_domain_verified_at": now_iso(),
+        }
+    return {
+        "custom_booking_domain": domain,
+        "custom_booking_domain_status": "dns_verified",
+        "custom_booking_domain_error": cert.get("detail", "DNS verified; configure BOOKING_DOMAINS_DIR for automatic SSL"),
+        "custom_booking_domain_verified_at": now_iso(),
+    }
+
+
+async def _apply_custom_booking_domain_update(
+    upd: dict,
+    *,
+    exclude_client_id: Optional[str] = None,
+    previous_domain: str = "",
+) -> dict:
+    if "custom_booking_domain" not in upd:
+        return upd
+    domain = _normalize_booking_domain(upd.get("custom_booking_domain"))
+    if not domain:
+        if previous_domain:
+            _remove_booking_domain_nginx(previous_domain)
+            _reload_booking_nginx()
+        upd["custom_booking_domain"] = ""
+        upd["custom_booking_domain_status"] = "none"
+        upd["custom_booking_domain_error"] = ""
+        upd["custom_booking_domain_verified_at"] = None
+        return upd
+    await _assert_booking_domain_available(domain, exclude_client_id=exclude_client_id)
+    if previous_domain and previous_domain != domain:
+        _remove_booking_domain_nginx(previous_domain)
+    provision = await _provision_client_booking_domain(domain)
+    upd.update(provision)
+    return upd
+
+
+def _infer_appointment_vertical(appointment: dict, client_doc: dict) -> str:
+    stored = _normalize_vertical(appointment.get("vertical"))
+    if stored in ("doctor", "salon"):
+        return stored
+    sid = str(appointment.get("service_id") or "").strip()
+    service_ids = [str(x).strip() for x in (appointment.get("service_ids") or []) if str(x).strip()]
+    doctor_ids = {
+        str(s.get("id") or "").strip()
+        for s in (client_doc.get("doctor_profile") or {}).get("services") or []
+        if isinstance(s, dict) and s.get("id")
+    }
+    salon_ids = {
+        str(s.get("id") or "").strip()
+        for s in (client_doc.get("salon_profile") or {}).get("services") or []
+        if isinstance(s, dict) and s.get("id")
+    }
+    check_ids = ([sid] if sid else []) + service_ids
+    for item_id in check_ids:
+        if item_id in doctor_ids:
+            return "doctor"
+        if item_id in salon_ids:
+            return "salon"
+    return _normalize_vertical(client_doc.get("vertical"))
+
+
+def _appointment_matches_vertical(appointment: dict, client_doc: dict, vertical: str) -> bool:
+    target = _normalize_vertical(vertical)
+    if target not in ("doctor", "salon"):
+        return True
+    return _infer_appointment_vertical(appointment, client_doc) == target
+
+
+def _branch_profile_for_vertical(branch_doc: Optional[dict], profile_field: str) -> dict:
+    if not branch_doc:
+        return {}
+    branch_profile = branch_doc.get("profile") or {}
+    profile_type = str(branch_doc.get("profile_type") or "").strip()
+    if profile_type and profile_type != profile_field:
+        return {}
+    return branch_profile if isinstance(branch_profile, dict) else {}
+
+
 def _normalize_service_catalog(profile: dict, vertical: str) -> dict:
     normalized = dict(profile or {})
+    if normalized.get("image_url"):
+        normalized["image_url"] = _absolute_media_url(str(normalized.get("image_url") or ""))
     services = normalized.get("services") or []
     if not isinstance(services, list):
         services = []
@@ -885,7 +1741,15 @@ def _normalize_service_catalog(profile: dict, vertical: str) -> dict:
             "image_url": normalized.get("image_url", ""),
             "active": True,
         }]
-    normalized["services"] = services
+    cleaned = []
+    for svc in services:
+        if not isinstance(svc, dict):
+            continue
+        row = dict(svc)
+        if row.get("image_url"):
+            row["image_url"] = _absolute_media_url(str(row.get("image_url") or ""))
+        cleaned.append(row)
+    normalized["services"] = cleaned
     return normalized
 
 # ---------------- Auth Endpoints ----------------
@@ -1071,14 +1935,59 @@ async def list_all_clients(_: dict = Depends(require_role("admin"))):
 
 # ---------------- Admin: Devices ----------------
 @api.get("/admin/devices")
-async def list_all_devices(_: dict = Depends(require_role("admin"))):
-    docs = await db.devices.find({}, {"_id": 0}).to_list(2000)
-    clients = {c["id"]: c["name"] for c in await db.clients.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(2000)}
+async def list_all_devices(
+    _: dict = Depends(require_role("admin")),
+    dealer_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+):
+    query: dict = {}
+    if client_id:
+        query["client_id"] = client_id
+    elif dealer_id:
+        query["dealer_id"] = dealer_id
+    docs = await db.devices.find(query, {"_id": 0}).to_list(2000)
+    clients = {c["id"]: c["name"] for c in await db.clients.find({}, {"_id": 0, "id": 1, "name": 1, "dealer_id": 1}).to_list(2000)}
     dealers = {d["id"]: d["name"] for d in await db.users.find({"role": "dealer"}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)}
     for d in docs:
         d["client_name"] = clients.get(d.get("client_id", ""), "")
         d["dealer_name"] = dealers.get(d.get("dealer_id", ""), "")
+        if not d.get("device_code"):
+            d["device_code"] = await _ensure_device_code(d)
     return docs
+
+
+@api.post("/admin/pair/complete")
+async def admin_pair_complete(body: PairCompleteIn, _: dict = Depends(require_role("admin"))):
+    return await _complete_device_pairing({"id": body.device_id}, body.pair_code, body.device_id)
+
+
+@api.post("/admin/devices/{did}/unpair")
+async def admin_unpair_device(did: str, _: dict = Depends(require_role("admin"))):
+    return await _unpair_device({"id": did})
+
+
+@api.put("/admin/devices/{did}")
+async def admin_update_device(did: str, body: DeviceUpdate, _: dict = Depends(require_role("admin"))):
+    dev = await db.devices.find_one({"id": did}, {"_id": 0, "client_id": 1})
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+    upd = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if "template_id" in upd and upd["template_id"]:
+        c = await db.clients.find_one({"id": dev["client_id"]}, {"_id": 0, "assigned_template_ids": 1})
+        if upd["template_id"] not in (c.get("assigned_template_ids") or []):
+            raise HTTPException(status_code=400, detail="Template not assigned to the client")
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    r = await db.devices.find_one_and_update({"id": did}, {"$set": upd}, return_document=True, projection={"_id": 0})
+    return r
+
+
+@api.delete("/admin/devices/{did}")
+async def admin_delete_device(did: str, _: dict = Depends(require_role("admin"))):
+    r = await db.devices.delete_one({"id": did})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"ok": True}
 
 # ---------------- Admin: Stats ----------------
 @api.get("/admin/stats")
@@ -1123,6 +2032,7 @@ async def create_client(body: ClientCreate, user: dict = Depends(require_role("d
         plan_doc = await db.plans.find_one({"id": body.plan_id}, {"_id": 0})
         if not plan_doc:
             raise HTTPException(status_code=400, detail="Invalid subscription plan selected")
+        _assert_plan_matches_vertical(plan_doc, body.vertical)
 
     client_code = await gen_client_code()
     phone = _clean_phone_value(body.phone)
@@ -1144,11 +2054,18 @@ async def create_client(body: ClientCreate, user: dict = Depends(require_role("d
     doc = {"id": str(uuid.uuid4()), "name": body.name, "email": email,
            "password_hash": hash_password(body.password),
            "phone": phone, "gst_number": gst_number, "address": body.address,
-           "plan": plan_value, "plan_id": body.plan_id, "vertical": body.vertical, "wallet_balance": float(body.wallet_balance),
+           "plan": plan_value, "plan_id": body.plan_id, "vertical": _normalize_vertical(body.vertical), "wallet_balance": float(body.wallet_balance),
            "dealer_id": user["id"], "dealer_name": user["name"],
            "client_code": client_code,
-            "assigned_template_ids": safe, "doctor_profile": {}, "salon_profile": {},
-           "status": status, "created_at": now_iso(), **subscription_fields}
+            "assigned_template_ids": safe, "doctor_profile": {}, "salon_profile": {}, "retailer_profile": {}, "general_profile": {},
+           "status": status, "created_at": now_iso(),
+           "custom_booking_domain": "", "custom_booking_domain_status": "none",
+           "custom_booking_domain_error": "", "custom_booking_domain_verified_at": None,
+           **subscription_fields}
+    if body.custom_booking_domain:
+        domain = _normalize_booking_domain(body.custom_booking_domain)
+        await _assert_booking_domain_available(domain)
+        doc.update(await _provision_client_booking_domain(domain))
     await db.clients.insert_one(doc); return clean(doc)
 
 @api.put("/dealer/clients/{cid}")
@@ -1178,18 +2095,58 @@ async def update_client(cid: str, body: ClientUpdate, user: dict = Depends(requi
         dealer_tpl_filter = {"$or": [{"assigned_dealer_ids": user["id"]}, {"assigned_dealer_ids": {"$exists": True, "$size": 0}}, {"assigned_dealer_ids": {"$exists": False}}]}
         valid = set([t["id"] for t in await db.templates.find(dealer_tpl_filter, {"_id": 0, "id": 1}).to_list(1000)])
         upd["assigned_template_ids"] = [t for t in body.assigned_template_ids if t in valid]
+    previous = await db.clients.find_one({"id": cid}, {"_id": 0, "dealer_id": 1, "custom_booking_domain": 1, "vertical": 1, "plan_id": 1})
+    if not previous:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if str(previous.get("dealer_id") or "").strip() != str(user.get("id") or "").strip():
+        raise HTTPException(status_code=403, detail="This client belongs to another dealer")
+    if "vertical" in upd:
+        upd["vertical"] = _normalize_vertical(upd["vertical"])
+    effective_vertical = upd.get("vertical") or previous.get("vertical") or "general"
+    if plan_doc:
+        _assert_plan_matches_vertical(plan_doc, effective_vertical)
+    elif "vertical" in upd and previous.get("plan_id"):
+        existing_plan = await db.plans.find_one({"id": previous["plan_id"]}, {"_id": 0})
+        if existing_plan:
+            _assert_plan_matches_vertical(existing_plan, upd["vertical"])
+    upd = await _apply_custom_booking_domain_update(
+        upd,
+        exclude_client_id=cid,
+        previous_domain=str(previous.get("custom_booking_domain") or ""),
+    )
     if not upd: raise HTTPException(status_code=400, detail="Nothing to update")
-    r = await db.clients.find_one_and_update({"id": cid, "dealer_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0, "password_hash": 0})
+    r = await db.clients.find_one_and_update({"id": cid}, {"$set": upd}, return_document=True, projection={"_id": 0, "password_hash": 0})
     if not r: raise HTTPException(status_code=404, detail="Client not found")
     if plan_doc:
         r["plan"] = plan_doc.get("type", r.get("plan", "cloud"))
     await _sync_client_wallet_status(r)
     r["dealer_name"] = user["name"]; return r
 
+@api.post("/dealer/clients/{cid}/provision-domain")
+async def provision_client_domain(cid: str, user: dict = Depends(require_role("dealer"))):
+    client = await db.clients.find_one({"id": cid, "dealer_id": user["id"]}, {"_id": 0, "custom_booking_domain": 1})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    domain = _normalize_booking_domain(client.get("custom_booking_domain"))
+    if not domain:
+        raise HTTPException(status_code=400, detail="Set a custom domain first")
+    await _assert_booking_domain_available(domain, exclude_client_id=cid)
+    provision = await _provision_client_booking_domain(domain)
+    await db.clients.update_one({"id": cid, "dealer_id": user["id"]}, {"$set": provision})
+    updated = await db.clients.find_one({"id": cid, "dealer_id": user["id"]}, {"_id": 0, "password_hash": 0})
+    if updated:
+        await _sync_client_wallet_status(updated)
+        updated["dealer_name"] = user["name"]
+    return updated or provision
+
 @api.delete("/dealer/clients/{cid}")
 async def delete_client(cid: str, user: dict = Depends(require_role("dealer"))):
+    existing = await db.clients.find_one({"id": cid, "dealer_id": user["id"]}, {"custom_booking_domain": 1})
     r = await db.clients.delete_one({"id": cid, "dealer_id": user["id"]})
     if r.deleted_count == 0: raise HTTPException(status_code=404, detail="Client not found")
+    if existing and existing.get("custom_booking_domain"):
+        _remove_booking_domain_nginx(str(existing["custom_booking_domain"]))
+        _reload_booking_nginx()
     await db.devices.delete_many({"client_id": cid})
     return {"ok": True}
 
@@ -1245,7 +2202,7 @@ async def dealer_stats(user: dict = Depends(require_role("dealer"))):
 
 # ---------------- Client: Self / Devices / Templates / Storefront ----------------
 @api.get("/client/me")
-async def client_me(user: dict = Depends(require_role("client"))):
+async def client_me(user: dict = Depends(require_role("client", allow_pending=True))):
     c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
     if not c: raise HTTPException(status_code=404, detail="Client not found")
     return await hydrate_client(c)
@@ -1261,8 +2218,13 @@ async def client_stats(user: dict = Depends(require_role("client", allow_pending
         extras["appointments_today"] = await db.appointments.count_documents({"client_id": user["id"], "date": datetime.now(timezone.utc).date().isoformat()})
     elif c and c.get("vertical") == "retailer":
         extras["products"] = await db.products.count_documents({"client_id": user["id"]})
+        extras["orders_pending"] = await db.orders.count_documents({"client_id": user["id"], "status": "pending"})
+        extras["orders_total"] = await db.orders.count_documents({"client_id": user["id"]})
     elif c and c.get("vertical") == "society":
         extras["rooms"] = await db.rooms.count_documents({"client_id": user["id"]})
+    elif c and _normalize_vertical(c.get("vertical")) == "general":
+        extras["courses"] = await db.courses.count_documents({"client_id": user["id"]})
+        extras["enrollments_pending"] = await db.course_enrollments.count_documents({"client_id": user["id"], "status": "pending"})
 
     limit_bytes, limit_gb, plan = await _get_client_storage_quota(c or {})
     used_bytes = await _get_media_usage_bytes(user["id"])
@@ -1270,9 +2232,14 @@ async def client_stats(user: dict = Depends(require_role("client", allow_pending
     remaining_gb = max(0.0, limit_gb - used_gb) if limit_gb > 0 else 0.0
     state = await _client_funding_state(c or {})
 
+    device_limit, _ = await _get_client_device_limit(c or {})
+    devices_remaining = max(0, device_limit - devices) if device_limit > 0 else None
+
     return {"devices": devices, "paired": paired, "templates": tpls,
             "wallet_balance": round(c.get("wallet_balance", 0) if c else 0, 2),
             "vertical": c.get("vertical", "general") if c else "general",
+            "device_limit": device_limit,
+            "devices_remaining": devices_remaining,
             "storage_used_gb": round(used_gb, 2),
             "storage_limit_gb": round(limit_gb, 2),
             "storage_remaining_gb": round(remaining_gb, 2),
@@ -1302,11 +2269,14 @@ async def list_client_devices(user: dict = Depends(require_role("client")), bran
         branch_map = {str(branch.get("id") or ""): branch.get("name") or branch.get("id") or "" for branch in branches}
     for device in devices:
         device["branch_name"] = branch_map.get(str(device.get("branch_id") or ""), "")
+        if not device.get("device_code"):
+            device["device_code"] = await _ensure_device_code(device)
     return devices
 
 @api.post("/client/devices")
 async def create_device(body: DeviceCreate, user: dict = Depends(require_role("client"))):
-    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "dealer_id": 1})
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "dealer_id": 1, "plan_id": 1, "plan": 1, "vertical": 1})
+    await _assert_client_device_capacity(user["id"], c)
     branch_name = ""
     if body.branch_id:
         branch = await db.branches.find_one({"id": body.branch_id, "client_id": user["id"]}, {"_id": 0, "id": 1, "name": 1})
@@ -1318,8 +2288,10 @@ async def create_device(body: DeviceCreate, user: dict = Depends(require_role("c
         if not playlist:
             raise HTTPException(status_code=400, detail="Playlist not assigned to you")
     pair_code = body.pair_code or gen_pair_code()
+    device_code = await gen_device_code()
     doc = {
         "id": str(uuid.uuid4()),
+        "device_code": device_code,
         "name": body.name,
         "location": body.location,
         "pair_code": pair_code,
@@ -1448,38 +2420,87 @@ async def delete_device(did: str, user: dict = Depends(require_role("client"))):
 
 @api.get("/client/devices/{did}/zones")
 async def get_device_zones(did: str, user: dict = Depends(require_role("client"))):
-    """Get template zones for a specific device."""
-    device = await db.devices.find_one({"id": did, "client_id": user["id"]}, {"_id": 0, "template_id": 1})
-    if not device: raise HTTPException(status_code=404, detail="Device not found")
-    
-    template_id = device.get("template_id")
-    if not template_id:
-        # If no template assigned, return empty zones (fall back to legacy zones)
-        return {"zones": [], "legacy_zones": ["main", "sidebar", "ticker"]}
-    
-    template = await db.templates.find_one({"id": template_id}, {"_id": 0, "layout": 1})
-    if not template:
-        return {"zones": [], "legacy_zones": ["main", "sidebar", "ticker"]}
-    
-    layout = template.get("layout", {})
-    zones = layout.get("zones", [])
-    
-    # If no zones defined in template, fall back to legacy zones
-    if not zones:
-        legacy = []
-        if layout.get("main"): legacy.append({"id": "main", "name": layout.get("main", "Main")})
-        if layout.get("sidebar"): legacy.append({"id": "sidebar", "name": layout.get("sidebar", "Sidebar")})
-        if layout.get("ticker"): legacy.append({"id": "ticker", "name": layout.get("ticker", "Ticker")})
-        if not legacy:
-            # Default fallback
-            legacy = [
-                {"id": "main", "name": "Main"},
-                {"id": "sidebar", "name": "Sidebar"},
-                {"id": "ticker", "name": "Ticker"}
-            ]
-        return {"zones": [], "legacy_zones": [z["id"] for z in legacy], "legacy_zone_names": {z["id"]: z["name"] for z in legacy}}
-
+    """Get effective template zones for a specific device."""
+    device = await db.devices.find_one({"id": did, "client_id": user["id"]}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    zones = await _resolve_device_zone_defs(device)
     return {"zones": zones, "legacy_zones": []}
+
+
+@api.get("/client/devices/{did}/player-settings")
+async def get_device_player_settings(did: str, user: dict = Depends(require_role("client"))):
+    device = await db.devices.find_one({"id": did, "client_id": user["id"]}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    zones = await _resolve_device_zone_defs(device)
+    settings = _normalize_player_settings(device.get("player_settings"))
+    return {
+        "device_id": device["id"],
+        "orientation": device.get("orientation", "auto"),
+        "brightness": int(device.get("brightness", 100) or 100),
+        "player_settings": settings,
+        "zones": zones,
+    }
+
+
+@api.put("/client/devices/{did}/player-settings")
+async def update_device_player_settings(did: str, body: PlayerSettingsUpdate, user: dict = Depends(require_role("client"))):
+    device = await db.devices.find_one({"id": did, "client_id": user["id"]}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    current = _normalize_player_settings(device.get("player_settings"))
+    patch = body.model_dump(exclude_none=True)
+    orientation = patch.pop("orientation", None)
+    brightness = patch.pop("brightness", None)
+
+    for key in ("hidden_zone_ids", "fill_blank_spaces", "custom_placement_enabled", "zone_placements", "zone_media_modes"):
+        if key in patch:
+            current[key] = patch[key]
+
+    device_upd: Dict[str, Any] = {
+        "player_settings": current,
+        "player_settings_updated_at": now_iso(),
+    }
+    if orientation is not None:
+        device_upd["orientation"] = orientation
+    if brightness is not None:
+        try:
+            device_upd["brightness"] = max(0, min(100, int(brightness)))
+        except Exception:
+            pass
+
+    r = await db.devices.find_one_and_update(
+        {"id": did, "client_id": user["id"]},
+        {"$set": device_upd},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    broadcast_settings = {
+        **current,
+        "orientation": r.get("orientation", "auto"),
+        "brightness": int(r.get("brightness", 100) or 100),
+    }
+    asyncio.create_task(
+        _broadcast_player_settings_update(
+            user["id"],
+            r["id"],
+            broadcast_settings,
+            branch_id=r.get("branch_id") or None,
+        )
+    )
+    zones = await _resolve_device_zone_defs(r)
+    return {
+        "device_id": r["id"],
+        "orientation": r.get("orientation", "auto"),
+        "brightness": int(r.get("brightness", 100) or 100),
+        "player_settings": _normalize_player_settings(r.get("player_settings")),
+        "zones": zones,
+    }
 
 
 @public_api.get("/rss")
@@ -1538,10 +2559,15 @@ async def _update_branch_service_profile(vertical: str, body: DoctorProfile, use
     return merged
 
 
-async def _list_service_appointments(user: dict):
+async def _list_service_appointments(user: dict, vertical: Optional[str] = None):
+    client_doc = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "vertical": 1, "doctor_profile": 1, "salon_profile": 1})
+    if not client_doc:
+        return []
+    target_vertical = _normalize_vertical(vertical or client_doc.get("vertical"))
     appointments = await db.appointments.find({"client_id": user["id"]}, {"_id": 0}).to_list(500)
+    filtered = [item for item in appointments if _appointment_matches_vertical(item, client_doc, target_vertical)]
     return sorted(
-        appointments,
+        filtered,
         key=lambda item: (
             _appointment_status_rank(item.get("status")),
             int(item.get("token") or 0),
@@ -1550,17 +2576,24 @@ async def _list_service_appointments(user: dict):
     )
 
 
-async def _build_service_appointment_board(client_id: str, recent_limit: int = 500, branch_id: Optional[str] = None) -> Dict[str, Any]:
+async def _build_service_appointment_board(client_id: str, recent_limit: int = 500, branch_id: Optional[str] = None, vertical: Optional[str] = None) -> Dict[str, Any]:
     today = _app_now().date().isoformat()
-    base_query = {"client_id": client_id}
+    client_doc = await db.clients.find_one(
+        {"id": client_id},
+        {"_id": 0, "vertical": 1, "doctor_profile": 1, "salon_profile": 1},
+    ) or {}
+    target_vertical = _normalize_vertical(vertical or client_doc.get("vertical"))
+    base_query: Dict[str, Any] = {"client_id": client_id}
     if branch_id:
         base_query["branch_id"] = branch_id
     branches = await db.branches.find({"client_id": client_id}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
     branch_name_map = {str(item.get("id") or ""): str(item.get("name") or "").strip() for item in branches if item.get("id")}
     if branch_id and branch_id not in branch_name_map:
         branch_name_map[branch_id] = "Branch"
-    today_items = await db.appointments.find({**base_query, "date": today}, {"_id": 0}).to_list(1000)
-    recent_items = await db.appointments.find(base_query, {"_id": 0}).sort("created_at", -1).to_list(max(20, recent_limit))
+    today_items_raw = await db.appointments.find({**base_query, "date": today}, {"_id": 0}).to_list(1000)
+    recent_items_raw = await db.appointments.find(base_query, {"_id": 0}).sort("created_at", -1).to_list(max(20, recent_limit))
+    today_items = [item for item in today_items_raw if _appointment_matches_vertical(item, client_doc, target_vertical)]
+    recent_items = [item for item in recent_items_raw if _appointment_matches_vertical(item, client_doc, target_vertical)]
 
     def _decorate(item: Dict[str, Any]) -> Dict[str, Any]:
         branch_label = str(item.get("branch_id") or "").strip()
@@ -1753,12 +2786,12 @@ async def update_salon_profile(body: DoctorProfile, user: dict = Depends(require
 
 @api.get("/client/doctor/appointments")
 async def list_appointments(user: dict = Depends(require_role("client"))):
-    return await _list_service_appointments(user)
+    return await _list_service_appointments(user, vertical="doctor")
 
 
 @api.get("/client/salon/appointments")
 async def list_salon_appointments(user: dict = Depends(require_role("client"))):
-    return await _list_service_appointments(user)
+    return await _list_service_appointments(user, vertical="salon")
 
 
 @api.get("/client/{vertical}/appointments/board")
@@ -1766,7 +2799,7 @@ async def get_service_appointment_board(vertical: Literal["doctor", "salon"], us
     c = await db.clients.find_one({"id": user["id"], "vertical": vertical}, {"_id": 0, "id": 1})
     if not c:
         raise HTTPException(status_code=403, detail=f"Not a {_service_label(vertical).lower()} account")
-    return await _build_service_appointment_board(user["id"], branch_id=branch_id)
+    return await _build_service_appointment_board(user["id"], branch_id=branch_id, vertical=vertical)
 
 
 @api.post("/client/doctor/appointments/{aid}/status")
@@ -1779,28 +2812,302 @@ async def set_salon_apt_status(aid: str, status: Literal["pending", "called", "d
     return await _set_service_appointment_status(aid, status, user)
 
 # ----------- Retailer vertical -----------
+@api.put("/client/retailer/profile")
+async def update_retailer_profile(body: RetailerProfile, user: dict = Depends(require_role("client", allow_pending=True))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "retailer_profile": 1, "vertical": 1})
+    if not c:
+        raise HTTPException(status_code=404, detail="Client not found")
+    merged = {**(c.get("retailer_profile") or {}), **body.model_dump()}
+    slides = merged.get("banner_slides") or []
+    if isinstance(slides, list):
+        merged["banner_slides"] = [
+            {
+                "id": str(slide.get("id") or uuid.uuid4()),
+                "image_url": str(slide.get("image_url") or "").strip(),
+                "title": str(slide.get("title") or "").strip(),
+                "subtitle": str(slide.get("subtitle") or "").strip(),
+                "link_url": str(slide.get("link_url") or "").strip(),
+                "sort_order": int(slide.get("sort_order") or idx),
+                "is_active": bool(slide.get("is_active", True)),
+            }
+            for idx, slide in enumerate(slides)
+            if isinstance(slide, dict) and str(slide.get("image_url") or "").strip()
+        ]
+    update_doc: Dict[str, Any] = {"retailer_profile": merged}
+    if _normalize_vertical(c.get("vertical")) != "retailer":
+        update_doc["vertical"] = "retailer"
+    await db.clients.update_one({"id": user["id"]}, {"$set": update_doc})
+    return merged
+
+
+# ----------- General vertical (courses & enrollments) -----------
+@api.put("/client/general/profile")
+async def update_general_profile(body: GeneralProfile, user: dict = Depends(require_role("client", allow_pending=True))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "general_profile": 1, "vertical": 1})
+    if not c:
+        raise HTTPException(status_code=404, detail="Client not found")
+    merged = {**(c.get("general_profile") or {}), **body.model_dump()}
+    slides = merged.get("banner_slides") or []
+    if isinstance(slides, list):
+        merged["banner_slides"] = [
+            {
+                "id": str(slide.get("id") or uuid.uuid4()),
+                "image_url": str(slide.get("image_url") or "").strip(),
+                "title": str(slide.get("title") or "").strip(),
+                "subtitle": str(slide.get("subtitle") or "").strip(),
+                "link_url": str(slide.get("link_url") or "").strip(),
+                "sort_order": int(slide.get("sort_order") or idx),
+                "is_active": bool(slide.get("is_active", True)),
+            }
+            for idx, slide in enumerate(slides)
+            if isinstance(slide, dict) and str(slide.get("image_url") or "").strip()
+        ]
+    update_doc: Dict[str, Any] = {"general_profile": merged}
+    if _normalize_vertical(c.get("vertical")) != "general":
+        update_doc["vertical"] = "general"
+    await db.clients.update_one({"id": user["id"]}, {"$set": update_doc})
+    return merged
+
+
+@api.get("/client/courses")
+async def list_courses(user: dict = Depends(require_role("client", allow_pending=True))):
+    rows = await db.courses.find({"client_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [hydrate_course(r) for r in rows]
+
+
+@api.post("/client/courses")
+async def create_course(body: CourseIn, user: dict = Depends(require_role("client", allow_pending=True))):
+    doc = {"id": str(uuid.uuid4()), "client_id": user["id"], **body.model_dump(), "created_at": now_iso(), "updated_at": now_iso()}
+    await db.courses.insert_one(doc)
+    return hydrate_course(clean(doc))
+
+
+@api.put("/client/courses/{cid}")
+async def update_course(cid: str, body: CourseUpdate, user: dict = Depends(require_role("client", allow_pending=True))):
+    upd = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    upd["updated_at"] = now_iso()
+    r = await db.courses.find_one_and_update({"id": cid, "client_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return hydrate_course(r)
+
+
+@api.delete("/client/courses/{cid}")
+async def delete_course(cid: str, user: dict = Depends(require_role("client", allow_pending=True))):
+    r = await db.courses.delete_one({"id": cid, "client_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Course not found")
+    await db.course_enrollments.delete_many({"client_id": user["id"], "course_id": cid})
+    return {"ok": True}
+
+
+@api.get("/client/enrollments")
+async def list_enrollments(user: dict = Depends(require_role("client", allow_pending=True))):
+    return await db.course_enrollments.find({"client_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.put("/client/enrollments/{eid}/status")
+async def update_enrollment_status(eid: str, body: EnrollmentStatusIn, user: dict = Depends(require_role("client", allow_pending=True))):
+    r = await db.course_enrollments.find_one_and_update(
+        {"id": eid, "client_id": user["id"]},
+        {"$set": {"status": body.status, "updated_at": now_iso()}},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    return r
+
+
+async def _resolve_general_provider(client_ref: str) -> dict:
+    client = await _resolve_public_client_ref(client_ref)
+    if _normalize_vertical(client.get("vertical")) != "general":
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return client
+
+
+async def _enroll_course(cid: str, body: CourseEnrollIn, public_user_id: Optional[str] = None) -> dict:
+    name = str(body.student_name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Student name must be at least 2 characters")
+    phone_digits = re.sub(r"\D", "", str(body.student_phone or ""))
+    if len(phone_digits) < 10 or len(phone_digits) > 15:
+        raise HTTPException(status_code=400, detail="Phone must be 10 to 15 digits")
+    course = await db.courses.find_one({"id": body.course_id, "client_id": cid, "is_published": {"$ne": False}}, {"_id": 0})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    seats = int(course.get("seats") or 0)
+    if seats > 0:
+        enrolled = await db.course_enrollments.count_documents({
+            "client_id": cid,
+            "course_id": body.course_id,
+            "status": {"$nin": ["cancelled"]},
+        })
+        if enrolled >= seats:
+            raise HTTPException(status_code=400, detail="This course is full. Please choose another batch.")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "client_id": cid,
+        "course_id": body.course_id,
+        "course_name": course.get("name") or "",
+        "student_name": name,
+        "student_phone": str(body.student_phone or "").strip(),
+        "student_email": str(body.student_email or "").strip().lower(),
+        "notes": str(body.notes or "").strip(),
+        "preferred_batch": str(body.preferred_batch or "").strip(),
+        "status": "pending",
+        "source": "public",
+        "public_user_id": public_user_id or "",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.course_enrollments.insert_one(doc)
+    return clean(doc)
+
+
 @api.get("/client/products")
 async def list_products(user: dict = Depends(require_role("client"))):
-    return await db.products.find({"client_id": user["id"]}, {"_id": 0}).to_list(1000)
+    rows = await db.products.find({"client_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [hydrate_product(r) for r in rows]
 
 @api.post("/client/products")
 async def create_product(body: ProductIn, user: dict = Depends(require_role("client"))):
-    doc = {"id": str(uuid.uuid4()), "client_id": user["id"], **body.model_dump(), "created_at": now_iso()}
-    await db.products.insert_one(doc); return clean(doc)
+    data = body.model_dump()
+    urls = [u for u in (data.get("image_urls") or []) if u]
+    if not urls and data.get("image_url"):
+        urls = [data["image_url"]]
+    data["image_urls"] = urls
+    data["image_url"] = urls[0] if urls else (data.get("image_url") or "")
+    if data.get("category_id"):
+        cat = await db.product_categories.find_one({"id": data["category_id"], "client_id": user["id"]})
+        if not cat:
+            raise HTTPException(status_code=400, detail="Invalid category")
+    doc = {"id": str(uuid.uuid4()), "client_id": user["id"], **data, "created_at": now_iso(), "updated_at": now_iso()}
+    await db.products.insert_one(doc)
+    return hydrate_product(clean(doc))
 
 @api.put("/client/products/{pid}")
 async def update_product(pid: str, body: ProductUpdate, user: dict = Depends(require_role("client"))):
     upd = {k: v for k, v in body.model_dump(exclude_none=True).items()}
-    if not upd: raise HTTPException(status_code=400, detail="Nothing to update")
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if "image_urls" in upd or "image_url" in upd:
+        existing = await db.products.find_one({"id": pid, "client_id": user["id"]}, {"_id": 0, "image_urls": 1, "image_url": 1})
+        urls = upd.get("image_urls")
+        if urls is None and existing:
+            urls = existing.get("image_urls") or []
+        urls = [u for u in (urls or []) if u]
+        if not urls and upd.get("image_url"):
+            urls = [upd["image_url"]]
+        elif not urls and existing and existing.get("image_url"):
+            urls = [existing["image_url"]]
+        upd["image_urls"] = urls
+        upd["image_url"] = urls[0] if urls else (upd.get("image_url") or "")
+    if upd.get("category_id"):
+        cat = await db.product_categories.find_one({"id": upd["category_id"], "client_id": user["id"]})
+        if not cat:
+            raise HTTPException(status_code=400, detail="Invalid category")
+    upd["updated_at"] = now_iso()
     r = await db.products.find_one_and_update({"id": pid, "client_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0})
-    if not r: raise HTTPException(status_code=404, detail="Product not found")
-    return r
+    if not r:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return hydrate_product(r)
 
 @api.delete("/client/products/{pid}")
 async def delete_product(pid: str, user: dict = Depends(require_role("client"))):
     r = await db.products.delete_one({"id": pid, "client_id": user["id"]})
-    if r.deleted_count == 0: raise HTTPException(status_code=404, detail="Product not found")
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
     return {"ok": True}
+
+# ----------- Product categories -----------
+@api.get("/client/categories")
+async def list_categories(user: dict = Depends(require_role("client"))):
+    return await db.product_categories.find({"client_id": user["id"]}, {"_id": 0}).sort("sort_order", 1).to_list(500)
+
+@api.post("/client/categories")
+async def create_category(body: CategoryIn, user: dict = Depends(require_role("client"))):
+    if body.parent_id:
+        parent = await db.product_categories.find_one({"id": body.parent_id, "client_id": user["id"]})
+        if not parent:
+            raise HTTPException(status_code=400, detail="Invalid parent category")
+    slug = _category_slug(body.name)
+    existing = await db.product_categories.find_one({"client_id": user["id"], "slug": slug})
+    if existing:
+        slug = f"{slug}-{str(uuid.uuid4())[:6]}"
+    doc = {
+        "id": str(uuid.uuid4()),
+        "client_id": user["id"],
+        "name": body.name.strip(),
+        "slug": slug,
+        "parent_id": body.parent_id,
+        "sort_order": body.sort_order,
+        "is_active": body.is_active,
+        "created_at": now_iso(),
+    }
+    await db.product_categories.insert_one(doc)
+    return clean(doc)
+
+@api.put("/client/categories/{cid}")
+async def update_category(cid: str, body: CategoryUpdate, user: dict = Depends(require_role("client"))):
+    upd = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if upd.get("name"):
+        upd["slug"] = _category_slug(upd["name"])
+    if upd.get("parent_id"):
+        parent = await db.product_categories.find_one({"id": upd["parent_id"], "client_id": user["id"]})
+        if not parent:
+            raise HTTPException(status_code=400, detail="Invalid parent category")
+    r = await db.product_categories.find_one_and_update(
+        {"id": cid, "client_id": user["id"]}, {"$set": upd}, return_document=True, projection={"_id": 0}
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return r
+
+@api.delete("/client/categories/{cid}")
+async def delete_category(cid: str, user: dict = Depends(require_role("client"))):
+    r = await db.product_categories.delete_one({"id": cid, "client_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Category not found")
+    await db.products.update_many({"client_id": user["id"], "category_id": cid}, {"$set": {"category_id": None}})
+    return {"ok": True}
+
+# ----------- Store orders (client panel) -----------
+@api.get("/client/orders")
+async def list_client_orders(user: dict = Depends(require_role("client"))):
+    return await db.orders.find({"client_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+@api.get("/client/orders/{oid}")
+async def get_client_order(oid: str, user: dict = Depends(require_role("client"))):
+    order = await db.orders.find_one({"id": oid, "client_id": user["id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+@api.put("/client/orders/{oid}/status")
+async def update_order_status(oid: str, body: OrderStatusIn, user: dict = Depends(require_role("client"))):
+    order = await db.orders.find_one({"id": oid, "client_id": user["id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if body.status == "cancelled" and order.get("status") not in ("pending", "confirmed"):
+        raise HTTPException(status_code=400, detail="Order cannot be cancelled in current status")
+    if body.status == "completed" and order.get("status") in ("cancelled", "completed"):
+        raise HTTPException(status_code=400, detail="Order cannot be completed in current status")
+    if body.status == "cancelled" and order.get("status") != "cancelled":
+        for item in order.get("items") or []:
+            await db.products.update_one(
+                {"id": item.get("product_id"), "client_id": user["id"]},
+                {"$inc": {"stock": int(item.get("qty") or 0)}},
+            )
+    await db.orders.update_one(
+        {"id": oid, "client_id": user["id"]},
+        {"$set": {"status": body.status, "updated_at": now_iso()}},
+    )
+    return await db.orders.find_one({"id": oid, "client_id": user["id"]}, {"_id": 0})
 
 # ----------- Society vertical -----------
 @api.get("/client/rooms")
@@ -1873,12 +3180,10 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
     c = await db.clients.find_one({"id": cid}, {"_id": 0, "password_hash": 0, "wallet_balance": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Provider not found")
-    vertical = c.get("vertical", "general")
-    branch_profile = {}
+    vertical = _normalize_vertical(c.get("vertical"))
+    branch_doc = None
     if branch_id:
-        branch = await db.branches.find_one({"id": branch_id, "client_id": cid}, {"_id": 0})
-        if branch:
-            branch_profile = branch.get("profile") or {}
+        branch_doc = await db.branches.find_one({"id": branch_id, "client_id": cid}, {"_id": 0})
     empty_profile = {
         "specialty": "",
         "qualifications": "",
@@ -1903,11 +3208,14 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
     # Doctor / Salon: include profile and live queue
     if vertical in ("doctor", "salon"):
         profile_field = _service_profile_field(vertical)
+        client_profile = c.get(profile_field, {}) or {}
+        branch_profile = _branch_profile_for_vertical(branch_doc, profile_field)
         if branch_id:
-            profile = _normalize_service_catalog(branch_profile or empty_profile, vertical)
+            merged = {**empty_profile, **client_profile, **branch_profile}
+            profile = _normalize_service_catalog(merged, vertical)
         else:
-            profile = _normalize_service_catalog(c.get(profile_field, {}) or empty_profile, vertical)
-        board = await _build_service_appointment_board(cid, recent_limit=200, branch_id=branch_id)
+            profile = _normalize_service_catalog({**empty_profile, **client_profile}, vertical)
+        board = await _build_service_appointment_board(cid, recent_limit=200, branch_id=branch_id, vertical=vertical)
         active = board.get("live_queue") or []
         today_bookings = board.get("today_bookings") or []
         dev_q = {"client_id": cid}
@@ -1965,10 +3273,45 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
             "subscription": await _resolve_storage_plan_for_client(c) or None,
         }
 
-    # Retailer: include product catalog
+    # Retailer: include storefront profile and product catalog
     if vertical == "retailer":
-        products = await db.products.find({"client_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-        return {**base, "products": products}
+        retailer_profile = {
+            "specialty": "",
+            "description": "",
+            "hours": "",
+            "is_open": True,
+            "image_url": "",
+        }
+        stored = c.get("retailer_profile") or {}
+        retailer_profile.update({
+            "specialty": stored.get("headline") or stored.get("specialty") or "",
+            "description": stored.get("description") or "",
+            "hours": stored.get("hours") or "",
+            "is_open": stored.get("is_open", True),
+            "image_url": _absolute_media_url(stored.get("image_url") or ""),
+            "announcement": stored.get("announcement") or "",
+            "banner_slides": _hydrate_banner_slides(stored.get("banner_slides") or []),
+        })
+        products = await db.products.find({"client_id": cid, "is_published": {"$ne": False}}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+        return {**base, "profile": retailer_profile, "products": [hydrate_product(p) for p in products]}
+
+    # General: academies, tuition centers, training providers
+    if vertical == "general":
+        stored = c.get("general_profile") or {}
+        profile = {
+            "headline": stored.get("headline") or "",
+            "tagline": stored.get("tagline") or "",
+            "description": stored.get("description") or "",
+            "hours": stored.get("hours") or "",
+            "is_open": stored.get("is_open", True),
+            "image_url": _absolute_media_url(stored.get("image_url") or ""),
+            "announcement": stored.get("announcement") or "",
+            "sector": stored.get("sector") or "academy",
+            "highlights": stored.get("highlights") or [],
+            "banner_slides": _hydrate_banner_slides(stored.get("banner_slides") or []),
+        }
+        courses = await db.courses.find({"client_id": cid, "is_published": {"$ne": False}}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        return {**base, "profile": profile, "courses": [hydrate_course(row) for row in courses]}
 
     # Society: include notices and rooms
     if vertical == "society":
@@ -2019,7 +3362,7 @@ async def _resolve_service_snapshots(profile: dict, body: AppointmentCreate) -> 
     return selected
 
 
-async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str] = None, branch_id: Optional[str] = None):
+async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str] = None, branch_id: Optional[str] = None, public_user_id: Optional[str] = None):
     patient_name = str(body.patient_name or "").strip()
     if len(patient_name) < 2:
         raise HTTPException(status_code=400, detail="Patient name must be at least 2 characters")
@@ -2030,7 +3373,8 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
     c = await db.clients.find_one({"id": cid, "vertical": {"$in": ["doctor", "salon"]}}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Service provider not found")
-    profile = _normalize_service_catalog(c.get(_service_profile_field(c.get("vertical", "doctor")), {}), c.get("vertical", "doctor"))
+    client_vertical = _normalize_vertical(c.get("vertical"))
+    profile = _normalize_service_catalog(c.get(_service_profile_field(client_vertical), {}), client_vertical)
     service_items = await _resolve_service_snapshots(profile, body)
     primary_service = service_items[0] if service_items else {}
     combined_duration = sum(max(5, int(item.get("duration_mins") or profile.get("slot_minutes", 15) or 15)) for item in service_items)
@@ -2047,7 +3391,7 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
         cid,
         today,
         body.preferred_time,
-        int(combined_duration or c.get(_service_profile_field(c.get("vertical", "doctor")), {}).get("slot_minutes", 15) or 15),
+        int(combined_duration or c.get(_service_profile_field(client_vertical), {}).get("slot_minutes", 15) or 15),
         branch_id=branch_id,
     )
     counter = await db.counters.find_one_and_update(
@@ -2087,7 +3431,7 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
             for item in service_items
         ],
         "service_price": combined_price,
-        "service_duration_mins": int(combined_duration or c.get(_service_profile_field(c.get("vertical", "doctor")), {}).get("slot_minutes", 15) or 15),
+        "service_duration_mins": int(combined_duration or c.get(_service_profile_field(client_vertical), {}).get("slot_minutes", 15) or 15),
         "service_image_url": primary_service.get("image_url", ""),
         "booking_location": route_info.get("requested_booking_location", ""),
         "booking_device_id": route_info.get("requested_booking_device_id", ""),
@@ -2095,8 +3439,10 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
         "routed_device_id": route_info.get("routed_device_id", ""),
         "routed_device_name": route_info.get("routed_device_name", ""),
         "route_strategy": route_info.get("route_strategy", "unrouted"),
+        "vertical": client_vertical,
         "source": source or body.source,
         "status": "pending",
+        "public_user_id": public_user_id or "",
         "created_at": now_iso(),
     }
     await db.appointments.insert_one(doc)
@@ -2104,6 +3450,26 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
         await _upsert_clinic_patient(cid, body.patient_phone, body.patient_name)
     await _broadcast_queue_refresh(cid, reason="booked")
     return clean(doc)
+
+
+@public_api.get("/resolve-host")
+async def public_resolve_booking_host(host: str):
+    domain = _normalize_booking_domain(host)
+    if not domain or domain in _platform_booking_hosts():
+        raise HTTPException(status_code=404, detail="Booking page not found for this domain")
+    client = await db.clients.find_one(
+        {"custom_booking_domain": domain, "custom_booking_domain_status": "active"},
+        {"_id": 0, "id": 1, "name": 1, "public_booking_slug": 1, "custom_booking_domain": 1, "vertical": 1},
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Booking page not found for this domain")
+    return {
+        "client_id": client["id"],
+        "name": client.get("name") or "",
+        "public_booking_slug": client.get("public_booking_slug") or _slugify_public_ref(client.get("name", "")),
+        "custom_booking_domain": domain,
+        "vertical": client.get("vertical") or "general",
+    }
 
 
 @public_api.get("/providers/{cid}")
@@ -2119,25 +3485,128 @@ async def public_provider_branch_profile(cid: str, bid: str):
 
 
 @public_api.post("/providers/{cid}/book")
-async def public_provider_book(cid: str, body: AppointmentCreate):
+async def public_provider_book(cid: str, body: AppointmentCreate, request: Request):
     client = await _resolve_public_client_ref(cid)
-    return await _book_service(client["id"], body, source="public")
+    customer = await _optional_public_customer(request, client["id"])
+    return await _book_service(client["id"], body, source="public", public_user_id=customer["id"] if customer else None)
 
 
 @public_api.post("/providers/{cid}/branches/{bid}/book")
-async def public_provider_branch_book(cid: str, bid: str, body: AppointmentCreate):
+async def public_provider_branch_book(cid: str, bid: str, body: AppointmentCreate, request: Request):
     client = await _resolve_public_client_ref(cid)
-    return await _book_service(client["id"], body, source="public", branch_id=bid)
+    customer = await _optional_public_customer(request, client["id"])
+    return await _book_service(client["id"], body, source="public", branch_id=bid, public_user_id=customer["id"] if customer else None)
+
+
+@public_api.post("/providers/{client_ref}/auth/signup")
+async def public_provider_signup(client_ref: str, body: ShopperSignupIn, response: Response):
+    client = await _resolve_booking_provider(client_ref)
+    doc = await _register_public_customer(client["id"], body)
+    return _customer_auth_response(doc, client["id"], response)
+
+
+@public_api.post("/providers/{client_ref}/auth/login")
+async def public_provider_login(client_ref: str, body: ShopperLoginIn, response: Response):
+    client = await _resolve_booking_provider(client_ref)
+    shopper = await _login_public_customer(client["id"], body)
+    return _customer_auth_response(shopper, client["id"], response)
+
+
+@public_api.post("/providers/{client_ref}/auth/logout")
+async def public_provider_logout(client_ref: str, response: Response, request: Request):
+    client = await _resolve_booking_provider(client_ref)
+    try:
+        await get_current_shopper(request, client["id"])
+    except HTTPException:
+        pass
+    response.delete_cookie("shopper_access_token", path="/")
+    return {"ok": True}
+
+
+@public_api.get("/providers/{client_ref}/auth/me")
+async def public_provider_me(client_ref: str, request: Request):
+    client = await _resolve_booking_provider(client_ref)
+    shopper = await get_current_shopper(request, client["id"])
+    return {"id": shopper["id"], "email": shopper["email"], "name": shopper.get("name", ""), "phone": shopper.get("phone", ""), "client_id": client["id"]}
+
+
+@public_api.get("/providers/{client_ref}/my-appointments")
+async def public_provider_my_appointments(client_ref: str, request: Request, branch_id: Optional[str] = None):
+    client = await _resolve_booking_provider(client_ref)
+    cid = client["id"]
+    customer = await get_current_shopper(request, cid)
+    today = _app_now().date().isoformat()
+    active_status = {"$nin": ["done", "cancelled"]}
+    query: Dict[str, Any] = {"client_id": cid, "date": today, "status": active_status, "public_user_id": customer["id"]}
+    if branch_id:
+        query["branch_id"] = branch_id
+    rows = await db.appointments.find(query, {"_id": 0}).sort("created_at", -1).to_list(20)
+    if not rows and customer.get("phone"):
+        phone_key = _normalize_patient_phone_key(customer["phone"])
+        fallback: Dict[str, Any] = {"client_id": cid, "date": today, "status": active_status, "patient_phone_key": phone_key}
+        if branch_id:
+            fallback["branch_id"] = branch_id
+        rows = await db.appointments.find(fallback, {"_id": 0}).sort("created_at", -1).to_list(20)
+    client_doc = await db.clients.find_one({"id": cid}, {"_id": 0, "vertical": 1, "doctor_profile": 1, "salon_profile": 1}) or {}
+    target_vertical = _normalize_vertical(client.get("vertical"))
+    rows = [item for item in rows if _appointment_matches_vertical(item, client_doc, target_vertical)]
+    return rows
+
+
+@public_api.get("/providers/{client_ref}/appointments/{aid}")
+async def public_provider_appointment(client_ref: str, aid: str):
+    client = await _resolve_booking_provider(client_ref)
+    apt = await db.appointments.find_one({"id": aid, "client_id": client["id"]}, {"_id": 0, "patient_phone_key": 0})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    return clean(apt)
+
+
+@public_api.get("/providers/{client_ref}/courses")
+async def public_provider_courses(client_ref: str):
+    client = await _resolve_general_provider(client_ref)
+    rows = await db.courses.find({"client_id": client["id"], "is_published": {"$ne": False}}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return [hydrate_course(r) for r in rows]
+
+
+@public_api.post("/providers/{client_ref}/enroll")
+async def public_provider_enroll(client_ref: str, body: CourseEnrollIn, request: Request):
+    client = await _resolve_general_provider(client_ref)
+    customer = await _optional_public_customer(request, client["id"])
+    return await _enroll_course(client["id"], body, public_user_id=customer["id"] if customer else None)
+
+
+@public_api.get("/providers/{client_ref}/my-enrollments")
+async def public_provider_my_enrollments(client_ref: str, request: Request):
+    client = await _resolve_general_provider(client_ref)
+    customer = await get_current_shopper(request, client["id"])
+    rows = await db.course_enrollments.find(
+        {"client_id": client["id"], "public_user_id": customer["id"]},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(50)
+    if not rows and customer.get("phone"):
+        phone_digits = re.sub(r"\D", "", customer["phone"])
+        rows = await db.course_enrollments.find(
+            {"client_id": client["id"], "student_phone": {"$regex": phone_digits[-10:]}},
+            {"_id": 0},
+        ).sort("created_at", -1).to_list(50)
+    return rows
 
 
 @public_api.get("/doctors/{cid}")
 async def public_doctor_profile(cid: str):
-    return await _public_service_profile(cid)
+    client = await _resolve_public_client_ref(cid)
+    if client.get("vertical") not in ("doctor", "salon"):
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return await _public_service_profile(client["id"])
 
 
 @public_api.get("/doctors/{cid}/branches/{bid}")
 async def public_doctor_branch_profile(cid: str, bid: str):
-    return await _public_service_profile(cid, branch_id=bid)
+    client = await _resolve_public_client_ref(cid)
+    if client.get("vertical") not in ("doctor", "salon"):
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return await _public_service_profile(client["id"], branch_id=bid)
 
 
 @public_api.post("/doctors/{cid}/book")
@@ -2148,6 +3617,298 @@ async def public_doctor_book(cid: str, body: AppointmentCreate):
 @public_api.post("/doctors/{cid}/branches/{bid}/book")
 async def public_doctor_branch_book(cid: str, bid: str, body: AppointmentCreate):
     return await _book_service(cid, body, source="public", branch_id=bid)
+
+
+# ----------- Public retailer store -----------
+@public_api.get("/store/{client_ref}")
+async def public_store_home(client_ref: str):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    profile_doc = await _public_service_profile(cid)
+    categories = await db.product_categories.find({"client_id": cid, "is_active": {"$ne": False}}, {"_id": 0}).sort("sort_order", 1).to_list(200)
+    product_query = {"client_id": cid, "is_published": {"$ne": False}}
+    recent_rows = await db.products.find(product_query, {"_id": 0}).sort("created_at", -1).limit(12).to_list(12)
+    deal_candidates = await db.products.find(
+        {**product_query, "compare_at_price": {"$gt": 0}},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(40).to_list(40)
+    deals = [
+        row for row in deal_candidates
+        if float(row.get("compare_at_price") or 0) > float(row.get("price") or 0)
+    ][:8]
+    profile = profile_doc.get("profile") or {}
+    return {
+        "client_id": cid,
+        "name": profile_doc.get("name") or "",
+        "phone": profile_doc.get("phone") or "",
+        "address": profile_doc.get("address") or "",
+        "profile": profile,
+        "categories": categories,
+        "banner_slides": profile.get("banner_slides") or [],
+        "recent_products": [hydrate_product(p) for p in recent_rows],
+        "deals": [hydrate_product(p) for p in deals],
+    }
+
+
+@public_api.get("/store/{client_ref}/categories")
+async def public_store_categories(client_ref: str):
+    client = await _resolve_retailer_store(client_ref)
+    return await db.product_categories.find({"client_id": client["id"], "is_active": {"$ne": False}}, {"_id": 0}).sort("sort_order", 1).to_list(200)
+
+
+@public_api.get("/store/{client_ref}/products")
+async def public_store_products(
+    client_ref: str,
+    q: str = "",
+    category_id: Optional[str] = None,
+    sort: str = "newest",
+    page: int = 1,
+    limit: int = 24,
+):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    query: Dict[str, Any] = {"client_id": cid, "is_published": {"$ne": False}}
+    if category_id:
+        query["category_id"] = category_id
+    search_filter = _product_search_filter(q)
+    if search_filter:
+        query.update(search_filter)
+    sort_map = {
+        "price_asc": [("price", 1)],
+        "price_desc": [("price", -1)],
+        "name": [("name", 1)],
+        "newest": [("created_at", -1)],
+        "relevance": [("name", 1)],
+    }
+    sort_spec = sort_map.get(sort, sort_map["newest"])
+    if q.strip() and sort not in sort_map:
+        sort_spec = sort_map["relevance"]
+    page = max(1, page)
+    limit = max(1, min(100, limit))
+    skip = (page - 1) * limit
+    total = await db.products.count_documents(query)
+    if search_filter and (sort == "relevance" or (q.strip() and sort == "newest")):
+        terms = [t for t in re.split(r"\s+", q.strip()) if t.strip()]
+        rows = await db.products.find(query, {"_id": 0}).to_list(500)
+        rows = [hydrate_product(r) for r in rows]
+        rows.sort(key=lambda p: _product_search_relevance(p, terms), reverse=True)
+        rows = rows[skip: skip + limit]
+    else:
+        rows = await db.products.find(query, {"_id": 0}).sort(sort_spec).skip(skip).limit(limit).to_list(limit)
+        rows = [hydrate_product(r) for r in rows]
+    return {"items": rows, "total": total, "page": page, "limit": limit, "q": q.strip()}
+
+
+@public_api.get("/store/{client_ref}/products/{pid}")
+async def public_store_product(client_ref: str, pid: str):
+    client = await _resolve_retailer_store(client_ref)
+    product = await db.products.find_one(
+        {"id": pid, "client_id": client["id"], "is_published": {"$ne": False}},
+        {"_id": 0},
+    )
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if product.get("category_id"):
+        category = await db.product_categories.find_one({"id": product["category_id"], "client_id": client["id"]}, {"_id": 0, "id": 1, "name": 1, "slug": 1})
+        product["category"] = category
+    return hydrate_product(product)
+
+
+@public_api.post("/store/{client_ref}/auth/signup")
+async def public_store_signup(client_ref: str, body: ShopperSignupIn, response: Response):
+    client = await _resolve_retailer_store(client_ref)
+    doc = await _register_public_customer(client["id"], body)
+    return _customer_auth_response(doc, client["id"], response)
+
+
+@public_api.post("/store/{client_ref}/auth/login")
+async def public_store_login(client_ref: str, body: ShopperLoginIn, response: Response):
+    client = await _resolve_retailer_store(client_ref)
+    shopper = await _login_public_customer(client["id"], body)
+    return _customer_auth_response(shopper, client["id"], response)
+
+
+@public_api.post("/store/{client_ref}/auth/logout")
+async def public_store_logout(client_ref: str, response: Response, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    try:
+        await get_current_shopper(request, client["id"])
+    except HTTPException:
+        pass
+    response.delete_cookie("shopper_access_token", path="/")
+    return {"ok": True}
+
+
+@public_api.get("/store/{client_ref}/auth/me")
+async def public_store_me(client_ref: str, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    shopper = await get_current_shopper(request, client["id"])
+    return {"id": shopper["id"], "email": shopper["email"], "name": shopper.get("name", ""), "phone": shopper.get("phone", ""), "client_id": client["id"]}
+
+
+@public_api.get("/store/{client_ref}/cart")
+async def public_store_get_cart(client_ref: str, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    cart = await _get_or_create_cart(cid, shopper["id"])
+    items = await _hydrate_cart_items(cid, cart.get("items") or [])
+    subtotal = round(sum(float(i.get("line_total") or 0) for i in items), 2)
+    return {"id": cart["id"], "items": items, "subtotal": subtotal, "item_count": sum(int(i.get("qty") or 0) for i in items)}
+
+
+@public_api.post("/store/{client_ref}/cart/items")
+async def public_store_add_cart_item(client_ref: str, body: CartItemIn, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    product = await db.products.find_one({"id": body.product_id, "client_id": cid, "is_published": {"$ne": False}}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    stock = int(product.get("stock") or 0)
+    if stock <= 0:
+        raise HTTPException(status_code=400, detail="Product out of stock")
+    cart = await _get_or_create_cart(cid, shopper["id"])
+    items = list(cart.get("items") or [])
+    found = False
+    for item in items:
+        if item.get("product_id") == body.product_id:
+            new_qty = int(item.get("qty") or 0) + body.qty
+            if new_qty > stock:
+                raise HTTPException(status_code=400, detail="Not enough stock available")
+            item["qty"] = new_qty
+            found = True
+            break
+    if not found:
+        if body.qty > stock:
+            raise HTTPException(status_code=400, detail="Not enough stock available")
+        items.append({"product_id": body.product_id, "qty": body.qty})
+    await db.carts.update_one({"id": cart["id"]}, {"$set": {"items": items, "updated_at": now_iso()}})
+    return await public_store_get_cart(client_ref, request)
+
+
+@public_api.put("/store/{client_ref}/cart/items/{product_id}")
+async def public_store_update_cart_item(client_ref: str, product_id: str, body: CartItemUpdate, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    product = await db.products.find_one({"id": product_id, "client_id": cid}, {"_id": 0, "stock": 1})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    stock = int(product.get("stock") or 0)
+    if body.qty > stock:
+        raise HTTPException(status_code=400, detail="Not enough stock available")
+    cart = await _get_or_create_cart(cid, shopper["id"])
+    items = list(cart.get("items") or [])
+    updated = False
+    for item in items:
+        if item.get("product_id") == product_id:
+            item["qty"] = body.qty
+            updated = True
+            break
+    if not updated:
+        raise HTTPException(status_code=404, detail="Item not in cart")
+    await db.carts.update_one({"id": cart["id"]}, {"$set": {"items": items, "updated_at": now_iso()}})
+    return await public_store_get_cart(client_ref, request)
+
+
+@public_api.delete("/store/{client_ref}/cart/items/{product_id}")
+async def public_store_remove_cart_item(client_ref: str, product_id: str, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    cart = await _get_or_create_cart(cid, shopper["id"])
+    items = [i for i in (cart.get("items") or []) if i.get("product_id") != product_id]
+    await db.carts.update_one({"id": cart["id"]}, {"$set": {"items": items, "updated_at": now_iso()}})
+    return await public_store_get_cart(client_ref, request)
+
+
+@public_api.post("/store/{client_ref}/orders")
+async def public_store_checkout(client_ref: str, body: OrderCreateIn, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    cart = await _get_or_create_cart(cid, shopper["id"])
+    hydrated = await _hydrate_cart_items(cid, cart.get("items") or [])
+    if not hydrated:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+    order_items = []
+    subtotal = 0.0
+    for item in hydrated:
+        product = await db.products.find_one({"id": item["product_id"], "client_id": cid}, {"_id": 0, "stock": 1, "is_published": 1})
+        if not product or product.get("is_published") is False:
+            raise HTTPException(status_code=400, detail=f"{item['name']} is no longer available")
+        qty = int(item.get("qty") or 0)
+        stock = int(product.get("stock") or 0)
+        if qty > stock:
+            raise HTTPException(status_code=400, detail=f"Not enough stock for {item['name']}")
+        line_total = round(float(item.get("unit_price") or 0) * qty, 2)
+        subtotal += line_total
+        order_items.append({
+            "product_id": item["product_id"],
+            "name": item["name"],
+            "sku": item.get("sku") or "",
+            "qty": qty,
+            "unit_price": float(item.get("unit_price") or 0),
+            "line_total": line_total,
+            "image_url": item.get("image_url") or "",
+        })
+    subtotal = round(subtotal, 2)
+    order = {
+        "id": str(uuid.uuid4()),
+        "order_no": await gen_order_no(cid),
+        "client_id": cid,
+        "shopper_id": shopper["id"],
+        "shopper_name": shopper.get("name") or body.shipping_name or "",
+        "shopper_email": shopper.get("email") or "",
+        "shopper_phone": body.shipping_phone or shopper.get("phone") or "",
+        "status": "pending",
+        "items": order_items,
+        "subtotal": subtotal,
+        "shipping_fee": 0.0,
+        "total": subtotal,
+        "shipping_address": {
+            "name": body.shipping_name or shopper.get("name") or "",
+            "phone": body.shipping_phone or shopper.get("phone") or "",
+            "line1": body.shipping_line1,
+            "city": body.shipping_city,
+            "pincode": body.shipping_pincode,
+        },
+        "payment_method": body.payment_method,
+        "payment_status": "pending",
+        "notes": body.notes or "",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    for item in order_items:
+        result = await db.products.update_one(
+            {"id": item["product_id"], "client_id": cid, "stock": {"$gte": item["qty"]}},
+            {"$inc": {"stock": -item["qty"]}},
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=400, detail=f"Not enough stock for {item['name']}")
+    await db.orders.insert_one(order)
+    await db.carts.update_one({"id": cart["id"]}, {"$set": {"items": [], "updated_at": now_iso()}})
+    return clean(order)
+
+
+@public_api.get("/store/{client_ref}/orders")
+async def public_store_orders(client_ref: str, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    return await db.orders.find({"client_id": cid, "shopper_id": shopper["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@public_api.get("/store/{client_ref}/orders/{oid}")
+async def public_store_order_detail(client_ref: str, oid: str, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    order = await db.orders.find_one({"id": oid, "client_id": cid, "shopper_id": shopper["id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
 
 
 @api.post("/client/{vertical}/appointments")
@@ -2481,6 +4242,61 @@ async def _resolve_storage_plan_for_client(client: dict) -> Optional[dict]:
     return None
 
 
+_VERTICAL_LABELS = {
+    "general": "Academy & services",
+    "doctor": "Doctor / Clinic",
+    "salon": "Salon / Spa",
+    "retailer": "Retailer",
+    "society": "Society / Apartment",
+}
+
+
+def _plan_vertical(plan: Optional[dict]) -> str:
+    if not plan:
+        return "general"
+    vertical = str(plan.get("vertical") or "general").strip().lower()
+    return vertical if vertical in VERTICALS else "general"
+
+
+def _assert_plan_matches_vertical(plan: Optional[dict], vertical: str) -> None:
+    if not plan:
+        return
+    plan_vertical = _plan_vertical(plan)
+    client_vertical = str(vertical or "general").strip().lower()
+    if plan_vertical != client_vertical:
+        plan_label = _VERTICAL_LABELS.get(plan_vertical, plan_vertical)
+        client_label = _VERTICAL_LABELS.get(client_vertical, client_vertical)
+        plan_name = plan.get("name") or "Selected plan"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Plan '{plan_name}' is for {plan_label} businesses. Choose a plan for {client_label}.",
+        )
+
+
+async def _get_client_device_limit(client: dict) -> tuple[int, Optional[dict]]:
+    plan = await _resolve_storage_plan_for_client(client)
+    if not plan:
+        return 0, None
+    return max(0, int(plan.get("device_limit") or 0)), plan
+
+
+async def _assert_client_device_capacity(client_id: str, client: Optional[dict] = None) -> None:
+    if not client:
+        client = await db.clients.find_one({"id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    limit, plan = await _get_client_device_limit(client)
+    if limit <= 0:
+        return
+    count = await db.devices.count_documents({"client_id": client_id})
+    if count >= limit:
+        plan_name = (plan or {}).get("name") or "your subscription plan"
+        raise HTTPException(
+            status_code=403,
+            detail=f"Device limit reached ({count}/{limit}) on {plan_name}. Remove a device or upgrade the plan.",
+        )
+
+
 async def _get_media_usage_bytes(client_id: str) -> int:
     agg = await db.media.aggregate([
         {"$match": {"client_id": client_id, "is_deleted": False}},
@@ -2549,6 +4365,9 @@ async def get_client_subscription(user: dict = Depends(require_role("client", al
         or (state["plan"] or {}).get("expires_at")
         or (state["plan"] or {}).get("valid_till")
     )
+    device_count = await db.devices.count_documents({"client_id": user["id"]})
+    device_limit, _ = await _get_client_device_limit(client)
+    devices_remaining = max(0, device_limit - device_count) if device_limit > 0 else None
     return {
         "active": state["active"],
         "plan": state["plan"],
@@ -2562,6 +4381,9 @@ async def get_client_subscription(user: dict = Depends(require_role("client", al
         "suspended": state["suspended"],
         "client_status": state["client_status"],
         "funded": state["funded"],
+        "device_count": device_count,
+        "device_limit": device_limit,
+        "devices_remaining": devices_remaining,
     }
 
 # ==================== Media ====================
@@ -2776,12 +4598,14 @@ async def debug_media(mid: str, _: dict = Depends(get_current_user)):
 # ==================== Playlists (template-driven zones) ====================
 class PlaylistItem(BaseModel):
     # Support multiple item types: media (old), text (new), youtube (new)
-    type: Optional[str] = None  # "media", "text", "youtube", "clock", "weather", "bookings", "queue", "notices"
+    type: Optional[str] = None  # "media", "text", "youtube", "clock", "weather", "bookings", "queue", "notices", "products", "courses", "services"
     media_id: Optional[str] = None  # for media items
     content: Optional[str] = None  # for text items
     url: Optional[str] = None  # for youtube items
     fit: Optional[Literal["cover", "contain"]] = "cover"  # for media items
     duration: int = 10  # seconds
+    font_size: Optional[int] = None  # px for text items
+    limit: Optional[int] = None  # max items for catalog widgets
     title: Optional[str] = None
     location: Optional[str] = None
     temperature: Optional[float] = None
@@ -3329,15 +5153,23 @@ async def player_payload(pair_code: str, request: Request):
         for item in items or []:
             # New format with explicit type field
             if item.get("type") == "text":
-                out.append({"type": "text", "content": item.get("content", ""), 
-                           "duration": item.get("duration", 10)})
+                try:
+                    font_size = max(12, min(120, int(item.get("font_size") or 24)))
+                except Exception:
+                    font_size = 24
+                out.append({
+                    "type": "text",
+                    "content": item.get("content", ""),
+                    "duration": item.get("duration", 10),
+                    "font_size": font_size,
+                })
             elif item.get("type") == "youtube":
                 out.append({"type": "youtube", "url": item.get("url", ""),
                            "duration": item.get("duration", 10)})
-            elif item.get("type") in {"clock", "weather", "bookings", "queue", "notices"}:
+            elif item.get("type") in {"clock", "weather", "bookings", "queue", "notices", "products", "courses", "services"}:
                 widget_type = item.get("type")
                 widget = {"type": widget_type, "duration": item.get("duration", 10)}
-                for key in ("title", "location", "temperature", "condition", "high", "low", "humidity", "entries", "notices"):
+                for key in ("title", "location", "temperature", "condition", "high", "low", "humidity", "entries", "notices", "limit"):
                     if item.get(key) is not None:
                         widget[key] = item.get(key)
                 # For the notices widget, always fetch live notices from the database
@@ -3463,13 +5295,18 @@ async def player_payload(pair_code: str, request: Request):
 
     await db.devices.update_one({"id": device["id"]}, {"$set": {"status": "paired", "last_seen": now_iso()}})
 
-    result = {"device_id": device["id"], "device_name": device["name"],
+    if not device.get("device_code"):
+        device["device_code"] = await _ensure_device_code(device)
+
+    result = {"device_id": device["id"], "device_code": device.get("device_code", ""), "device_name": device["name"],
             "client_id": device["client_id"],
             "branch_id": device_branch_id,
             "weather": weather,
             "orientation": device.get("orientation", "auto"),
             "playlist_id": (chosen_playlist or {}).get("id") or device.get("playlist_id", ""),
             "brightness": int(device.get("brightness", 100) or 100),
+            "player_settings": _normalize_player_settings(device.get("player_settings")),
+            "player_settings_updated_at": device.get("player_settings_updated_at"),
             "zones": zones, "template": template,
             "poll_after_seconds": 60}
 
@@ -3754,10 +5591,21 @@ async def on_startup():
         await db.users.create_index("id", unique=True)
         await db.clients.create_index("email", unique=True)
         await db.clients.create_index("id", unique=True)
+        await db.clients.create_index("custom_booking_domain", unique=True, sparse=True)
         await db.templates.create_index("id", unique=True)
         await db.devices.create_index("id", unique=True)
+        await db.devices.create_index("device_code", unique=True, sparse=True)
         await db.plans.create_index("id", unique=True)
         await db.products.create_index("id", unique=True)
+        await db.product_categories.create_index("id", unique=True)
+        await db.product_categories.create_index([("client_id", 1), ("slug", 1)], unique=True)
+        await db.store_shoppers.create_index("id", unique=True)
+        await db.store_shoppers.create_index([("client_id", 1), ("email", 1)], unique=True)
+        await db.carts.create_index("id", unique=True)
+        await db.carts.create_index([("client_id", 1), ("shopper_id", 1)], unique=True)
+        await db.orders.create_index("id", unique=True)
+        await db.orders.create_index([("client_id", 1), ("created_at", -1)])
+        await db.orders.create_index([("client_id", 1), ("order_no", 1)], unique=True)
         await db.rooms.create_index("id", unique=True)
         # Clean up null/empty room_no_norm fields, then normalize safe room_no -> room_no_norm
         try:
@@ -3803,7 +5651,12 @@ async def on_startup():
         await db.clinic_visits.create_index("id", unique=True)
         await db.clinic_visits.create_index([("client_id", 1), ("patient_phone_key", 1), ("visit_at", -1)])
         await db.appointments.create_index([("client_id", 1), ("patient_phone_key", 1), ("created_at", -1)])
-        await db.appointments.create_index([("client_id", 1), ("date", 1), ("status", 1), ("routed_location", 1)])
+        await db.appointments.create_index([("client_id", 1), ("public_user_id", 1), ("date", -1)])
+        await db.courses.create_index("id", unique=True)
+        await db.courses.create_index([("client_id", 1), ("created_at", -1)])
+        await db.course_enrollments.create_index("id", unique=True)
+        await db.course_enrollments.create_index([("client_id", 1), ("created_at", -1)])
+        await db.course_enrollments.create_index([("client_id", 1), ("course_id", 1)])
 
         # init object storage (non-blocking)
         try: init_storage()
