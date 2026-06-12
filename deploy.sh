@@ -13,11 +13,6 @@ EOF
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is not installed or not on PATH."
   exit 1
@@ -25,13 +20,13 @@ fi
 
 mkdir -p "$ROOT_DIR/nginx/certs/live/rpsignage.com" "$ROOT_DIR/nginx/certs/archive/rpsignage.com" "$ROOT_DIR/nginx/www" "$ROOT_DIR/nginx/booking-domains"
 
+# Ensure required variables exist in the env file (without sourcing)
 ensure_env_var() {
   local key="$1"
   local value="$2"
-  if grep -q "^${key}=" "$ENV_FILE"; then
-    return
+  if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
   fi
-  printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
 }
 
 ensure_env_var "SIGNAGE_HOST_ROOT" "$ROOT_DIR"
@@ -45,24 +40,32 @@ if [ ! -f "$ROOT_DIR/nginx/certs/live/rpsignage.com/fullchain.pem" ] || [ ! -f "
     -subj "/CN=rpsignage.com"
 fi
 
+# Build and start containers
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build backend frontend nginx
-
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d mongodb minio redis backend frontend nginx
 
-CERT_CHECK_OUTPUT="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm certbot certificates 2>/dev/null || true)"
-if ! printf '%s' "$CERT_CHECK_OUTPUT" | grep -q "Certificate Name: rpsignage.com"; then
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm certbot certonly \
-    --webroot -w /var/www/certbot \
-    --email "$LETSENCRYPT_EMAIL" \
-    --agree-tos --no-eff-email --non-interactive \
-    -d rpsignage.com -d rpsignage.in
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart nginx
+# Let certbot run without sourcing env (it gets vars from --env-file)
+if docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm certbot certificates 2>/dev/null | grep -q "Certificate Name: rpsignage.com"; then
+  echo "Certificate already exists"
+else
+  # Get LETSENCRYPT_EMAIL from env file without sourcing
+  LETSENCRYPT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | head -1)
+  if [ -n "$LETSENCRYPT_EMAIL" ]; then
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm certbot certonly \
+      --webroot -w /var/www/certbot \
+      --email "$LETSENCRYPT_EMAIL" \
+      --agree-tos --no-eff-email --non-interactive \
+      -d rpsignage.com -d rpsignage.in || true
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart nginx
+  fi
 fi
 
-chmod +x "$ROOT_DIR/scripts/booking-ssl.sh"
-"$ROOT_DIR/scripts/booking-ssl.sh" setup
-
-echo "Provisioning pending client booking domains (if any)..."
-"$ROOT_DIR/scripts/booking-ssl.sh" provision-all || true
+# Run SSL scripts
+if [ -f "$ROOT_DIR/scripts/booking-ssl.sh" ]; then
+  chmod +x "$ROOT_DIR/scripts/booking-ssl.sh" 2>/dev/null || true
+  "$ROOT_DIR/scripts/booking-ssl.sh" setup 2>/dev/null || true
+  echo "Provisioning pending client booking domains (if any)..."
+  "$ROOT_DIR/scripts/booking-ssl.sh" provision-all 2>/dev/null || true
+fi
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
