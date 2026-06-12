@@ -1553,13 +1553,29 @@ def _remove_booking_domain_nginx(domain: str) -> None:
         path.unlink(missing_ok=True)
 
 
+def _docker_compose_cmd(*args: str) -> Optional[list]:
+    root = BOOKING_SSL_COMPOSE_ROOT
+    if not root:
+        return None
+    compose_file = Path(root) / "docker-compose.yml"
+    return [
+        "docker",
+        "compose",
+        "--project-directory",
+        root,
+        "-f",
+        str(compose_file),
+        *args,
+    ]
+
+
 def _reload_booking_nginx() -> None:
-    if not BOOKING_SSL_COMPOSE_ROOT:
+    cmd = _docker_compose_cmd("exec", "-T", "nginx", "nginx", "-s", "reload")
+    if not cmd:
         return
     try:
         subprocess.run(
-            ["docker", "compose", "exec", "-T", "nginx", "nginx", "-s", "reload"],
-            cwd=BOOKING_SSL_COMPOSE_ROOT,
+            cmd,
             capture_output=True,
             text=True,
             timeout=60,
@@ -1575,19 +1591,27 @@ def _issue_booking_domain_cert(domain: str) -> dict:
     email = os.environ.get("LETSENCRYPT_EMAIL", "").strip()
     if not email:
         return {"ok": False, "detail": "LETSENCRYPT_EMAIL is not configured"}
-    cmd = [
-        "docker", "compose", "run", "--rm", "certbot", "certonly",
-        "--webroot", "-w", "/var/www/certbot",
-        "-d", domain,
-        "--email", email,
+    cmd = _docker_compose_cmd(
+        "run",
+        "--rm",
+        "certbot",
+        "certonly",
+        "--webroot",
+        "-w",
+        "/var/www/certbot",
+        "-d",
+        domain,
+        "--email",
+        email,
         "--agree-tos",
         "--non-interactive",
         "--keep-until-expiring",
-    ]
+    )
+    if not cmd:
+        return {"ok": False, "detail": "SSL automation is not configured on the server"}
     try:
         result = subprocess.run(
             cmd,
-            cwd=BOOKING_SSL_COMPOSE_ROOT,
             capture_output=True,
             text=True,
             timeout=300,

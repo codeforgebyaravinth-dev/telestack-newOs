@@ -23,7 +23,19 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$ROOT_DIR/nginx/certs/live/rpsignage.com" "$ROOT_DIR/nginx/certs/archive/rpsignage.com" "$ROOT_DIR/nginx/www"
+mkdir -p "$ROOT_DIR/nginx/certs/live/rpsignage.com" "$ROOT_DIR/nginx/certs/archive/rpsignage.com" "$ROOT_DIR/nginx/www" "$ROOT_DIR/nginx/booking-domains"
+
+ensure_env_var() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    return
+  fi
+  printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
+}
+
+ensure_env_var "SIGNAGE_HOST_ROOT" "$ROOT_DIR"
+ensure_env_var "BOOKING_SSL_COMPOSE_ROOT" "$ROOT_DIR"
 
 if [ ! -f "$ROOT_DIR/nginx/certs/live/rpsignage.com/fullchain.pem" ] || [ ! -f "$ROOT_DIR/nginx/certs/live/rpsignage.com/privkey.pem" ]; then
   openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
@@ -34,7 +46,7 @@ fi
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build backend frontend nginx
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d mongodb minio backend frontend nginx
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d mongodb minio redis backend frontend nginx
 
 CERT_CHECK_OUTPUT="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm certbot certificates 2>/dev/null || true)"
 if ! printf '%s' "$CERT_CHECK_OUTPUT" | grep -q "Certificate Name: rpsignage.com"; then

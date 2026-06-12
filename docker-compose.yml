@@ -61,12 +61,12 @@ services:
       BOOKING_DOMAIN_CNAME_TARGET: ${BOOKING_DOMAIN_CNAME_TARGET:-booking.rpsignage.com}
       BOOKING_DOMAIN_TARGET_IP: ${BOOKING_DOMAIN_TARGET_IP:-}
       BOOKING_DOMAINS_DIR: /booking-domains
-      BOOKING_SSL_COMPOSE_ROOT: ${BOOKING_SSL_COMPOSE_ROOT:-/compose}
+      BOOKING_SSL_COMPOSE_ROOT: ${BOOKING_SSL_COMPOSE_ROOT:-${SIGNAGE_HOST_ROOT:-/compose}}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
     volumes:
       - ./nginx/booking-domains:/booking-domains
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:/compose:ro
+      - ${SIGNAGE_HOST_ROOT:-.}:${SIGNAGE_HOST_ROOT:-/compose}:ro
     depends_on:
       mongodb:
         condition: service_healthy

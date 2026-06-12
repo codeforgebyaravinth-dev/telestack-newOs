@@ -41,7 +41,12 @@ JWT_SECRET=<strong-random-secret>
 ADMIN_PASSWORD=<strong-admin-password>
 MINIO_ROOT_PASSWORD=<strong-minio-password>
 LETSENCRYPT_EMAIL=admin@rpsignage.com
+SIGNAGE_HOST_ROOT=/home/ubuntu/SignageOS1-main
+BOOKING_SSL_COMPOSE_ROOT=/home/ubuntu/SignageOS1-main
+BOOKING_DOMAIN_CNAME_TARGET=booking.rpsignage.com
 ```
+
+Use the **real absolute path** where you cloned the repo for `SIGNAGE_HOST_ROOT` and `BOOKING_SSL_COMPOSE_ROOT` (or run `./deploy.sh`, which writes them for you).
 
 The example file already points the stack to:
 
@@ -89,7 +94,72 @@ Both domains serve the same application.
 - If you change the primary public domain, update `PUBLIC_APP_URL` in `backend/.env.docker`.
 - MinIO console is kept internal by default. If you want it public, add a separate protected host later.
 
-## 8) Backups
+## 8) Custom booking domains (client SSL)
+
+Each dealer client can use a domain like `book.clinic.com` for public booking.
+
+### DNS (at the client's registrar)
+
+Add **one** of:
+
+- **CNAME** `book.clinic.com` → `booking.rpsignage.com` (or your `BOOKING_DOMAIN_CNAME_TARGET`)
+- **A record** `book.clinic.com` → your VPS public IP (`BOOKING_DOMAIN_TARGET_IP`)
+
+Also ensure `booking.rpsignage.com` has an **A record** to the same VPS IP (used as the CNAME target).
+
+### After deploy — one-time VPS checks
+
+```bash
+cd /path/to/SignageOS1-main
+
+# Env must include email + host paths
+grep -E '^(LETSENCRYPT_EMAIL|SIGNAGE_HOST_ROOT|BOOKING_SSL_COMPOSE_ROOT|BOOKING_DOMAIN_CNAME_TARGET)=' backend/.env.docker
+
+# Directories used for per-domain nginx + certs
+ls -la nginx/booking-domains nginx/certs nginx/www
+
+# Backend must see Docker and the compose project path
+docker compose --env-file backend/.env.docker exec backend docker compose version
+docker compose --env-file backend/.env.docker exec backend sh -c 'test -f "$BOOKING_SSL_COMPOSE_ROOT/docker-compose.yml" && echo compose_ok'
+
+# Rebuild backend after pulling updates (installs Docker CLI in the container)
+docker compose --env-file backend/.env.docker build backend
+docker compose --env-file backend/.env.docker up -d backend
+```
+
+### Issue SSL for a client domain
+
+1. In **Dealer → Clients**, set the custom domain and save.
+2. Wait for DNS propagation (often 5–30 minutes).
+3. Click **Verify SSL** on that client row (or save the domain again).
+
+Status flow: **DNS pending** → **SSL pending** → **Live**.
+
+### Manual cert test (optional)
+
+Replace `book.clinic.com` with the real domain:
+
+```bash
+docker compose --env-file backend/.env.docker run --rm certbot certonly \
+  --webroot -w /var/www/certbot \
+  -d book.clinic.com \
+  --email "$(grep '^LETSENCRYPT_EMAIL=' backend/.env.docker | cut -d= -f2-)" \
+  --agree-tos --non-interactive --dry-run
+```
+
+If dry-run succeeds, click **Verify SSL** in the dealer UI (or rerun without `--dry-run`).
+
+### Common SSL errors
+
+| Symptom | Fix |
+|---------|-----|
+| `LETSENCRYPT_EMAIL is not configured` | Set `LETSENCRYPT_EMAIL` in `backend/.env.docker`, recreate backend |
+| `no such file or directory` (docker/compose) | Set `SIGNAGE_HOST_ROOT` and `BOOKING_SSL_COMPOSE_ROOT` to the repo's absolute path on the VPS, rebuild backend |
+| `Connection refused` / timeout on port 80 | Open firewall: `ufw allow 80` and `ufw allow 443` |
+| DNS pending | CNAME not propagated yet; check with `dig book.clinic.com` |
+| certbot 404 on ACME challenge | Ensure nginx is up and `nginx/booking-domains/*.conf` exists for that domain |
+
+## 9) Backups
 
 Create a backup with:
 
