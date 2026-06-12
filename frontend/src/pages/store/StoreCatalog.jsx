@@ -39,6 +39,8 @@ function CatalogViewToggle({ view, onChange }) {
   );
 }
 
+const LIST_ROW_HEIGHT = "h-[140px]";
+
 export function ProductListRow({ product, clientRef, resolvedHost, onCartUpdate }) {
   const { api, shopper } = useShopperAuth();
   const navigate = useNavigate();
@@ -72,39 +74,40 @@ export function ProductListRow({ product, clientRef, resolvedHost, onCartUpdate 
   };
 
   return (
-    <div className="bg-white border border-[#D5D9D9] rounded-lg overflow-hidden hover:shadow-md transition-shadow">
-      <div className="flex items-stretch gap-0">
-        <Link to={path} className="w-24 sm:w-28 md:w-32 shrink-0 bg-[#F7F8F8] border-r border-[#E7E7E7]">
-          <div className="h-full relative">
-            {img ? (
-              <img src={img} alt={product.name} className="absolute inset-0 w-full h-full object-cover" />
-            ) : (
-              <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200" />
-            )}
-          </div>
+    <div className={`bg-white border border-[#D5D9D9] rounded-lg overflow-hidden hover:shadow-md transition-shadow ${LIST_ROW_HEIGHT}`}>
+      <div className="flex h-full">
+        <Link
+          to={path}
+          className="h-full w-[140px] shrink-0 overflow-hidden bg-[#F7F8F8] border-r border-[#E7E7E7]"
+        >
+          {img ? (
+            <img src={img} alt={product.name} className="block w-full h-full object-cover" />
+          ) : (
+            <div className="block w-full h-full bg-gradient-to-br from-gray-100 to-gray-200" />
+          )}
         </Link>
-        <div className="flex flex-1 min-w-0 items-center gap-3 p-3 sm:p-4">
-          <Link to={path} className="flex-1 min-w-0">
-            <h3 className="font-semibold text-[#0F1111] line-clamp-2 leading-snug">{product.name}</h3>
-            <p className="mt-1 text-sm text-[#565959] line-clamp-2 leading-relaxed">
+        <div className="flex flex-1 min-w-0 h-full items-center gap-2 sm:gap-3 px-3 sm:px-4">
+          <Link to={path} className="flex-1 min-w-0 overflow-hidden">
+            <h3 className="font-semibold text-[#0F1111] text-sm sm:text-base line-clamp-2 leading-snug">{product.name}</h3>
+            <p className="mt-0.5 text-xs sm:text-sm text-[#565959] line-clamp-2 leading-snug">
               {product.description || "Tap for full product details."}
             </p>
-            <div className="mt-2 flex flex-wrap items-baseline gap-2">
-              <span className="text-lg font-bold text-[#0F1111]">₹{Number(product.price || 0).toLocaleString()}</span>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
+              <span className="text-base sm:text-lg font-bold text-[#0F1111]">₹{Number(product.price || 0).toLocaleString()}</span>
               {product.compare_at_price > product.price ? (
-                <span className="text-sm text-[#565959] line-through">₹{Number(product.compare_at_price).toLocaleString()}</span>
+                <span className="text-xs sm:text-sm text-[#565959] line-through">₹{Number(product.compare_at_price).toLocaleString()}</span>
               ) : null}
               {!inStock ? (
                 <span className="text-xs font-medium text-red-600">Out of stock</span>
               ) : null}
             </div>
           </Link>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+          <div className="flex flex-col sm:flex-row items-center gap-2 shrink-0">
             {inStock ? (
-              <div className="flex items-center border border-[#D5D9D9] rounded-md bg-white self-center sm:self-auto">
+              <div className="flex items-center border border-[#D5D9D9] rounded-md bg-white">
                 <button
                   type="button"
-                  className="p-2 hover:bg-gray-50 disabled:opacity-40"
+                  className="p-1.5 sm:p-2 hover:bg-gray-50 disabled:opacity-40"
                   disabled={qty <= 1 || busy}
                   onClick={(e) => {
                     e.preventDefault();
@@ -115,10 +118,10 @@ export function ProductListRow({ product, clientRef, resolvedHost, onCartUpdate 
                 >
                   <Minus className="w-4 h-4" />
                 </button>
-                <span className="px-3 min-w-[2.5rem] text-center font-medium text-sm">{qty}</span>
+                <span className="px-2 sm:px-3 min-w-[2rem] text-center font-medium text-sm">{qty}</span>
                 <button
                   type="button"
-                  className="p-2 hover:bg-gray-50 disabled:opacity-40"
+                  className="p-1.5 sm:p-2 hover:bg-gray-50 disabled:opacity-40"
                   disabled={qty >= maxQty || busy}
                   onClick={(e) => {
                     e.preventDefault();
@@ -135,7 +138,7 @@ export function ProductListRow({ product, clientRef, resolvedHost, onCartUpdate 
               type="button"
               disabled={!inStock || busy}
               onClick={addToCart}
-              className="rounded-full bg-[#FFD814] hover:bg-[#F7CA00] text-[#0F1111] border border-[#FCD200] px-4 sm:px-5 h-10 text-sm font-semibold"
+              className="rounded-full bg-[#FFD814] hover:bg-[#F7CA00] text-[#0F1111] border border-[#FCD200] px-3 sm:px-5 h-9 sm:h-10 text-sm font-semibold"
             >
               <ShoppingCart className="w-4 h-4 sm:mr-1.5" />
               <span className="hidden sm:inline">{busy ? "Adding..." : "Add to cart"}</span>
@@ -219,51 +222,166 @@ function ProductRow({ title, subtitle, products, clientRef, resolvedHost, viewAl
   );
 }
 
-function CategoryGrid({ categories, clientRef, resolvedHost }) {
-  if (!categories.length) return null;
-  const searchBase = storePath(clientRef, "search", resolvedHost);
+const HOME_PAGE_SIZE = 12;
+
+function StorePagination({ page, totalPages, onPageChange }) {
+  if (totalPages <= 1) return null;
+  const pages = [];
+  const addPage = (n) => {
+    if (n >= 1 && n <= totalPages && !pages.includes(n)) pages.push(n);
+  };
+  addPage(1);
+  if (page > 3) pages.push("…");
+  for (let n = Math.max(2, page - 1); n <= Math.min(totalPages - 1, page + 1); n += 1) addPage(n);
+  if (page < totalPages - 2) pages.push("…");
+  if (totalPages > 1) addPage(totalPages);
+
   return (
-    <section className="space-y-3">
-      <h2 className="text-xl font-bold">Shop by category</h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        {categories.map((cat, i) => (
-          <Link
-            key={cat.id}
-            to={`${searchBase}?category_id=${encodeURIComponent(cat.id)}`}
-            className="bg-white border border-[#D5D9D9] rounded-lg p-4 text-center hover:border-[#FF9900] hover:shadow-md transition-all"
+    <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={page <= 1}
+        onClick={() => onPageChange(page - 1)}
+        className="rounded-md"
+      >
+        Previous
+      </Button>
+      {pages.map((n, i) =>
+        n === "…" ? (
+          <span key={`ellipsis-${i}`} className="px-2 text-[#565959]">…</span>
+        ) : (
+          <Button
+            key={n}
+            type="button"
+            variant={n === page ? "default" : "outline"}
+            size="sm"
+            onClick={() => onPageChange(n)}
+            className={`min-w-9 rounded-md ${n === page ? "bg-[#232F3E] hover:bg-[#37475A]" : ""}`}
           >
-            <div
-              className="w-12 h-12 mx-auto rounded-full flex items-center justify-center text-white font-bold text-lg mb-2"
-              style={{ background: `hsl(${(i * 47) % 360} 55% 42%)` }}
-            >
-              {(cat.name || "?").charAt(0).toUpperCase()}
-            </div>
-            <div className="text-sm font-medium line-clamp-2">{cat.name}</div>
-          </Link>
-        ))}
+            {n}
+          </Button>
+        )
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={page >= totalPages}
+        onClick={() => onPageChange(page + 1)}
+        className="rounded-md"
+      >
+        Next
+      </Button>
+    </div>
+  );
+}
+
+function HomeProductList({ api, categories = [], clientRef, resolvedHost, onCartUpdate }) {
+  const [products, setProducts] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [categoryId, setCategoryId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const totalPages = Math.max(1, Math.ceil(total / HOME_PAGE_SIZE));
+  const selectedCategory = categories.find((c) => c.id === categoryId);
+
+  useEffect(() => {
+    setPage(1);
+  }, [categoryId]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const { data } = await api.get("/products", {
+          params: {
+            sort: "newest",
+            page,
+            limit: HOME_PAGE_SIZE,
+            category_id: categoryId || undefined,
+          },
+        });
+        setProducts(data.items || []);
+        setTotal(data.total || 0);
+      } catch {
+        setProducts([]);
+        setTotal(0);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [api, page, categoryId]);
+
+  const goToPage = (next) => {
+    const safe = Math.min(Math.max(1, next), totalPages);
+    setPage(safe);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold">All products</h2>
+          <p className="text-sm text-[#565959] mt-0.5">{total} items</p>
+        </div>
+        {categories.length > 0 ? (
+          <select
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+            className="border border-[#D5D9D9] rounded-md px-3 py-2 text-sm bg-white min-w-[10rem]"
+            aria-label="Filter by category"
+          >
+            <option value="">All categories</option>
+            {categories.map((cat) => (
+              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            ))}
+          </select>
+        ) : null}
       </div>
+      {loading ? (
+        <div className="text-center py-16 text-[#565959]">Loading products...</div>
+      ) : products.length === 0 ? (
+        <div className="bg-white rounded-lg p-10 text-center text-[#565959] border border-[#D5D9D9]">
+          {selectedCategory
+            ? `No products in "${selectedCategory.name}".`
+            : "No products available yet."}
+        </div>
+      ) : (
+        <>
+          <div className="space-y-3">
+            {products.map((p) => (
+              <ProductListRow
+                key={p.id}
+                product={p}
+                clientRef={clientRef}
+                resolvedHost={resolvedHost}
+                onCartUpdate={onCartUpdate}
+              />
+            ))}
+          </div>
+          <StorePagination page={page} totalPages={totalPages} onPageChange={goToPage} />
+        </>
+      )}
     </section>
   );
 }
 
 export function StoreHome() {
   const { api, clientRef, resolvedHost } = useShopperAuth();
+  const { setCartCount } = useOutletContext() || {};
   const [store, setStore] = useState(null);
-  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [homeRes, prodRes] = await Promise.all([
-          api.get(""),
-          api.get("/products", { params: { limit: 24, sort: "newest" } }),
-        ]);
-        setStore(homeRes.data);
-        setProducts(prodRes.data.items || []);
+        const { data } = await api.get("");
+        setStore(data);
       } catch {
         setStore(null);
-        setProducts([]);
       } finally {
         setLoading(false);
       }
@@ -352,7 +470,13 @@ export function StoreHome() {
         </div>
       )}
 
-      <CategoryGrid categories={categories} clientRef={clientRef} resolvedHost={resolvedHost} />
+      <HomeProductList
+        api={api}
+        categories={categories}
+        clientRef={clientRef}
+        resolvedHost={resolvedHost}
+        onCartUpdate={setCartCount}
+      />
 
       <ProductRow
         title="New arrivals"
@@ -360,7 +484,7 @@ export function StoreHome() {
         products={recentProducts}
         clientRef={clientRef}
         resolvedHost={resolvedHost}
-        viewAllTo={`${searchPath}?sort=newest`}
+        viewAllTo={`${searchPath}?sort=newest&view=menu`}
       />
 
       <ProductRow
@@ -369,24 +493,8 @@ export function StoreHome() {
         products={deals}
         clientRef={clientRef}
         resolvedHost={resolvedHost}
-        viewAllTo={searchPath}
+        viewAllTo={`${searchPath}?view=menu`}
       />
-
-      <section>
-        <div className="flex items-end justify-between gap-3 mb-4">
-          <h2 className="text-xl font-bold">All products</h2>
-          <Link to={`${searchPath}?view=menu`} className="text-sm text-[#007185] hover:text-[#C45500] hover:underline">Browse catalog</Link>
-        </div>
-        {products.length === 0 ? (
-          <div className="bg-white rounded-lg p-10 text-center text-[#565959] border border-[#D5D9D9]">No products available yet.</div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {products.map((p) => (
-              <ProductCard key={p.id} product={p} clientRef={clientRef} resolvedHost={resolvedHost} />
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -486,7 +594,7 @@ export function StoreSearch() {
           {q ? `No products found for "${q}". Try another name or tag.` : "No products found."}
         </div>
       ) : view === "menu" ? (
-        <div className="">
+        <div className="space-y-3">
           {products.map((p) => (
             <ProductListRow
               key={p.id}

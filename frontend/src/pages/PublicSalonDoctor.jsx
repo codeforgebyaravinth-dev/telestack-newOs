@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   Scissors, Stethoscope, Clock, MapPin, Phone, CalendarCheck, IndianRupee,
-  ArrowLeft, User, LogOut, Sparkles, Users, Timer, Award,
+  ArrowLeft, Sparkles, Users, Timer, Award,
   ChevronRight, Star, Loader2,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -11,6 +11,8 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { resolveMediaUrl } from "../lib/api";
 import { loadActiveBookings } from "../lib/publicCustomerApi";
+import { publicSiteUrl } from "../lib/publicSiteUrl";
+import PublicTopNav from "../components/PublicTopNav";
 
 function themeFor(isSalon) {
   if (isSalon) {
@@ -508,6 +510,7 @@ export default function PublicSalonDoctor({
   setJustBooked,
   timezone,
   clientId,
+  resolvedHost = null,
   apiBase,
   branchId,
 }) {
@@ -562,31 +565,21 @@ export default function PublicSalonDoctor({
 
   return (
     <div className="min-h-screen text-[#111827]" style={{ background: theme.pageBg }}>
-      <header className="sticky top-0 z-40 backdrop-blur-md bg-white/90 border-b border-[#E5E7EB]/80 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 shadow-md" style={{ background: theme.accent }}>
-              <BrandIcon className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="font-display font-extrabold text-lg tracking-tight truncate">{doc.name}</div>
-              <div className="text-[10px] uppercase tracking-[0.2em] text-[#6B7280]">{theme.providerLabel}</div>
-            </div>
+      <PublicTopNav
+        title={doc.name}
+        subtitle={theme.providerLabel}
+        siteUrl={publicSiteUrl(clientId, { resolvedHost, vertical: doc?.vertical })}
+        siteName={doc.name}
+        user={customer}
+        onSignIn={onLoginOpen}
+        onLogout={onLogout}
+        brandIcon={(
+          <div className="w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 shadow-md" style={{ background: theme.accent }}>
+            <BrandIcon className="w-5 h-5" />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {customer && customer !== false ? (
-              <>
-                <span className="text-xs text-[#6B7280] hidden md:inline">Hello, {customer.name || customer.email}</span>
-                <Button type="button" variant="ghost" size="sm" onClick={onLogout} className="rounded-xl"><LogOut className="w-4 h-4" /></Button>
-              </>
-            ) : (
-              <>
-                <Button type="button" variant="outline" size="sm" onClick={onLoginOpen} className="rounded-xl">Sign in</Button>
-                <Button type="button" size="sm" onClick={onSignupOpen} className="rounded-xl text-white" style={{ background: theme.accent }}>
-                  <User className="w-3.5 h-3.5 mr-1" /> Sign up
-                </Button>
-              </>
-            )}
+        )}
+        trailing={(
+          <>
             <span
               className={`text-[11px] font-semibold uppercase tracking-wider px-3 py-1.5 rounded-full border ${isOpen ? "" : "bg-gray-100 text-gray-600 border-gray-200"}`}
               style={isOpen ? { background: theme.accentSoft, color: theme.accentText, borderColor: theme.accentBorder } : undefined}
@@ -596,9 +589,9 @@ export default function PublicSalonDoctor({
             <Button type="button" size="sm" onClick={scrollToBooking} className="rounded-xl text-white hidden sm:inline-flex" style={{ background: theme.accent }}>
               Book now
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        )}
+      />
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 pb-16">
       {activeBookings?.length > 0 ? (

@@ -107,47 +107,40 @@ Add **one** of:
 
 Also ensure `booking.rpsignage.com` has an **A record** to the same VPS IP (used as the CNAME target).
 
-### After deploy — one-time VPS checks
+### Automated SSL (recommended)
+
+`deploy.sh` runs this automatically. You can also run it manually:
 
 ```bash
-cd /path/to/SignageOS1-main
+cd /root/rpsignage/signagex   # your repo path
 
-# Env must include email + host paths
-grep -E '^(LETSENCRYPT_EMAIL|SIGNAGE_HOST_ROOT|BOOKING_SSL_COMPOSE_ROOT|BOOKING_DOMAIN_CNAME_TARGET)=' backend/.env.docker
-
-# Directories used for per-domain nginx + certs
-ls -la nginx/booking-domains nginx/certs nginx/www
-
-# Backend must see Docker and the compose project path
-docker compose --env-file backend/.env.docker exec backend docker compose version
-docker compose --env-file backend/.env.docker exec backend sh -c 'test -f "$BOOKING_SSL_COMPOSE_ROOT/docker-compose.yml" && echo compose_ok'
-
-# Rebuild backend after pulling updates (installs Docker CLI in the container)
-docker compose --env-file backend/.env.docker build backend
-docker compose --env-file backend/.env.docker up -d backend
+chmod +x scripts/booking-ssl.sh
+./scripts/booking-ssl.sh setup          # one-time: dirs, rebuild backend, verify Docker/nginx
+./scripts/booking-ssl.sh provision-all  # issue SSL for every pending client domain
+./scripts/booking-ssl.sh doctor book.clinic.com  # optional diagnostics + ACME HTTP test
 ```
 
-### Issue SSL for a client domain
+**Workflow**
 
 1. In **Dealer → Clients**, set the custom domain and save.
-2. Wait for DNS propagation (often 5–30 minutes).
-3. Click **Verify SSL** on that client row (or save the domain again).
+2. Client adds DNS: CNAME → `booking.rpsignage.com`.
+3. Run `./scripts/booking-ssl.sh provision-all` (or wait for cron — see below).
 
 Status flow: **DNS pending** → **SSL pending** → **Live**.
 
-### Manual cert test (optional)
-
-Replace `book.clinic.com` with the real domain:
+**Cron** (auto-retry every 15 minutes until SSL is live):
 
 ```bash
-docker compose --env-file backend/.env.docker run --rm certbot certonly \
-  --webroot -w /var/www/certbot \
-  -d book.clinic.com \
-  --email "$(grep '^LETSENCRYPT_EMAIL=' backend/.env.docker | cut -d= -f2-)" \
-  --agree-tos --non-interactive --dry-run
+crontab -e
 ```
 
-If dry-run succeeds, click **Verify SSL** in the dealer UI (or rerun without `--dry-run`).
+Add:
+
+```cron
+*/15 * * * * cd /root/rpsignage/signagex && ./scripts/booking-ssl.sh provision-all >> /var/log/booking-ssl.log 2>&1
+```
+
+Replace `/root/rpsignage/signagex` with your real path.
 
 ### Common SSL errors
 

@@ -11,8 +11,11 @@ import os
 import logging
 import uuid
 import re
+import secrets
+import smtplib
 import socket
 import subprocess
+from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal, Dict, Any
 from urllib.parse import quote, urlparse
@@ -951,8 +954,20 @@ class ShopperSignupIn(BaseModel):
     phone: str = ""
 
 class ShopperLoginIn(BaseModel):
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
     password: str
+
+class ShopperSignupVerifyIn(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=4, max_length=8)
+
+class ShopperSignupResendIn(BaseModel):
+    email: EmailStr
+
+class ShopperProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
 
 class CartItemIn(BaseModel):
     product_id: str
@@ -1203,29 +1218,153 @@ async def _optional_public_customer(request: Request, client_id: str) -> Optiona
     except HTTPException:
         return None
 
-async def _register_public_customer(cid: str, body: ShopperSignupIn) -> dict:
+
+def _shopper_phone_key(phone: Optional[str]) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) < 10:
+        return ""
+    return digits[-10:]
+
+
+def _shopper_verification_code() -> str:
+    return f"{secrets.randbelow(900000) + 100000:06d}"
+
+
+def _send_shopper_verification_email_sync(to_email: str, code: str, store_name: str) -> None:
+    host = os.environ.get("SMTP_HOST", "").strip()
+    port = int(os.environ.get("SMTP_PORT", "587") or "587")
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = os.environ.get("SMTP_PASSWORD", "").strip()
+    from_addr = os.environ.get("SMTP_FROM", user or "noreply@rpsignage.com").strip()
+    subject = f"Verify your email — {store_name or 'Store'}"
+    body = (
+        f"Your verification code is: {code}\n\n"
+        f"Enter this code to complete signup at {store_name or 'the store'}.\n"
+        f"The code expires in 15 minutes.\n"
+    )
+    if not host:
+        logger.warning("SMTP not configured; verification code for %s: %s", to_email, code)
+        return
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_email
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.ehlo()
+        if os.environ.get("SMTP_TLS", "true").lower() not in ("0", "false", "no"):
+            smtp.starttls()
+            smtp.ehlo()
+        if user and password:
+            smtp.login(user, password)
+        smtp.sendmail(from_addr, [to_email], msg.as_string())
+
+
+async def _send_shopper_verification_email(to_email: str, code: str, store_name: str) -> None:
+    await asyncio.to_thread(_send_shopper_verification_email_sync, to_email, code, store_name)
+
+
+async def _request_public_customer_signup(cid: str, body: ShopperSignupIn, *, store_name: str = "") -> dict:
     email = body.email.lower().strip()
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     if await db.store_shoppers.find_one({"client_id": cid, "email": email}):
-        raise HTTPException(status_code=400, detail="Email already registered for this provider")
-    doc = {
+        raise HTTPException(status_code=400, detail="Email already registered for this store")
+    phone_key = _shopper_phone_key(body.phone)
+    if phone_key and await db.store_shoppers.find_one({"client_id": cid, "phone_key": phone_key}):
+        raise HTTPException(status_code=400, detail="Phone number already registered for this store")
+    code = _shopper_verification_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    pending = {
         "id": str(uuid.uuid4()),
         "client_id": cid,
         "email": email,
         "password_hash": hash_password(body.password),
         "name": body.name.strip(),
         "phone": body.phone.strip(),
+        "phone_key": phone_key,
+        "code": code,
+        "expires_at": expires_at,
+        "created_at": now_iso(),
+    }
+    await db.shopper_signup_pending.delete_many({"client_id": cid, "email": email})
+    await db.shopper_signup_pending.insert_one(pending)
+    await _send_shopper_verification_email(email, code, store_name)
+    return {"ok": True, "email": email, "message": "Verification code sent to your email"}
+
+
+async def _verify_public_customer_signup(cid: str, body: ShopperSignupVerifyIn) -> dict:
+    email = body.email.lower().strip()
+    pending = await db.shopper_signup_pending.find_one({"client_id": cid, "email": email})
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending signup found. Please sign up again.")
+    expires = pending.get("expires_at")
+    if isinstance(expires, str):
+        try:
+            expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+        except Exception:
+            expires = None
+    if isinstance(expires, datetime):
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
+            await db.shopper_signup_pending.delete_one({"id": pending["id"]})
+            raise HTTPException(status_code=400, detail="Verification code expired. Please sign up again.")
+    if str(body.code).strip() != str(pending.get("code") or "").strip():
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+    if await db.store_shoppers.find_one({"client_id": cid, "email": email}):
+        await db.shopper_signup_pending.delete_one({"id": pending["id"]})
+        raise HTTPException(status_code=400, detail="Email already registered for this store")
+    phone_key = str(pending.get("phone_key") or "")
+    if phone_key and await db.store_shoppers.find_one({"client_id": cid, "phone_key": phone_key}):
+        raise HTTPException(status_code=400, detail="Phone number already registered for this store")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "client_id": cid,
+        "email": email,
+        "password_hash": pending["password_hash"],
+        "name": str(pending.get("name") or "").strip(),
+        "phone": str(pending.get("phone") or "").strip(),
+        "phone_key": phone_key,
+        "email_verified": True,
         "created_at": now_iso(),
     }
     await db.store_shoppers.insert_one(doc)
+    await db.shopper_signup_pending.delete_one({"id": pending["id"]})
     return doc
 
-async def _login_public_customer(cid: str, body: ShopperLoginIn) -> dict:
+
+async def _resend_public_customer_signup(cid: str, body: ShopperSignupResendIn, *, store_name: str = "") -> dict:
     email = body.email.lower().strip()
-    shopper = await db.store_shoppers.find_one({"client_id": cid, "email": email})
+    pending = await db.shopper_signup_pending.find_one({"client_id": cid, "email": email})
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending signup found. Please sign up again.")
+    code = _shopper_verification_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    await db.shopper_signup_pending.update_one(
+        {"id": pending["id"]},
+        {"$set": {"code": code, "expires_at": expires_at}},
+    )
+    await _send_shopper_verification_email(email, code, store_name)
+    return {"ok": True, "email": email, "message": "Verification code resent"}
+
+
+async def _login_public_customer(cid: str, body: ShopperLoginIn) -> dict:
+    email = body.email.lower().strip() if body.email else ""
+    phone = str(body.phone or "").strip()
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="Enter email or phone number")
+    shopper = None
+    if email:
+        shopper = await db.store_shoppers.find_one({"client_id": cid, "email": email})
+    else:
+        phone_key = _shopper_phone_key(phone)
+        if not phone_key:
+            raise HTTPException(status_code=400, detail="Enter a valid 10-digit phone number")
+        shopper = await db.store_shoppers.find_one({"client_id": cid, "phone_key": phone_key})
     if not shopper or not verify_password(body.password, shopper.get("password_hash", "")):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email/phone or password")
+    if shopper.get("email_verified") is False:
+        raise HTTPException(status_code=403, detail="Please verify your email before signing in")
     return shopper
 
 def _customer_auth_response(shopper: dict, cid: str, response: Response) -> dict:
@@ -1569,20 +1708,26 @@ def _docker_compose_cmd(*args: str) -> Optional[list]:
     ]
 
 
-def _reload_booking_nginx() -> None:
-    cmd = _docker_compose_cmd("exec", "-T", "nginx", "nginx", "-s", "reload")
-    if not cmd:
-        return
+def _reload_booking_nginx() -> dict:
+    test_cmd = _docker_compose_cmd("exec", "-T", "nginx", "nginx", "-t")
+    reload_cmd = _docker_compose_cmd("exec", "-T", "nginx", "nginx", "-s", "reload")
+    if not test_cmd or not reload_cmd:
+        return {"ok": False, "detail": "nginx reload is not configured"}
     try:
-        subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        test = subprocess.run(test_cmd, capture_output=True, text=True, timeout=60, check=False)
+        if test.returncode != 0:
+            detail = (test.stderr or test.stdout or "nginx -t failed").strip()
+            logger.warning("nginx config test failed: %s", detail)
+            return {"ok": False, "detail": detail[:500]}
+        reload = subprocess.run(reload_cmd, capture_output=True, text=True, timeout=60, check=False)
+        if reload.returncode != 0:
+            detail = (reload.stderr or reload.stdout or "nginx reload failed").strip()
+            logger.warning("nginx reload failed: %s", detail)
+            return {"ok": False, "detail": detail[:500]}
+        return {"ok": True, "detail": "nginx reloaded"}
     except Exception as exc:
         logger.warning("nginx reload failed: %s", exc)
+        return {"ok": False, "detail": f"nginx reload failed: {exc}"}
 
 
 def _issue_booking_domain_cert(domain: str) -> dict:
@@ -1606,6 +1751,9 @@ def _issue_booking_domain_cert(domain: str) -> dict:
         "--agree-tos",
         "--non-interactive",
         "--keep-until-expiring",
+        "--preferred-challenges",
+        "http",
+        "-v",
     )
     if not cmd:
         return {"ok": False, "detail": "SSL automation is not configured on the server"}
@@ -1652,12 +1800,19 @@ async def _provision_client_booking_domain(domain: str) -> dict:
         }
     wrote = _write_booking_domain_nginx(domain, ssl=False)
     if wrote:
-        _reload_booking_nginx()
+        reload = _reload_booking_nginx()
+        if not reload.get("ok"):
+            return {
+                "custom_booking_domain": domain,
+                "custom_booking_domain_status": "dns_verified",
+                "custom_booking_domain_error": reload.get("detail", "nginx reload failed before SSL"),
+                "custom_booking_domain_verified_at": now_iso(),
+            }
     cert = _issue_booking_domain_cert(domain)
     if cert.get("ok"):
         if wrote:
             _write_booking_domain_nginx(domain, ssl=True)
-            _reload_booking_nginx()
+            _reload_booking_nginx()  # best-effort after cert issued
         return {
             "custom_booking_domain": domain,
             "custom_booking_domain_status": "active",
@@ -3523,10 +3678,22 @@ async def public_provider_branch_book(cid: str, bid: str, body: AppointmentCreat
 
 
 @public_api.post("/providers/{client_ref}/auth/signup")
-async def public_provider_signup(client_ref: str, body: ShopperSignupIn, response: Response):
+async def public_provider_signup(client_ref: str, body: ShopperSignupIn):
     client = await _resolve_booking_provider(client_ref)
-    doc = await _register_public_customer(client["id"], body)
+    return await _request_public_customer_signup(client["id"], body, store_name=client.get("name") or "")
+
+
+@public_api.post("/providers/{client_ref}/auth/signup/verify")
+async def public_provider_signup_verify(client_ref: str, body: ShopperSignupVerifyIn, response: Response):
+    client = await _resolve_booking_provider(client_ref)
+    doc = await _verify_public_customer_signup(client["id"], body)
     return _customer_auth_response(doc, client["id"], response)
+
+
+@public_api.post("/providers/{client_ref}/auth/signup/resend")
+async def public_provider_signup_resend(client_ref: str, body: ShopperSignupResendIn):
+    client = await _resolve_booking_provider(client_ref)
+    return await _resend_public_customer_signup(client["id"], body, store_name=client.get("name") or "")
 
 
 @public_api.post("/providers/{client_ref}/auth/login")
@@ -3739,10 +3906,26 @@ async def public_store_product(client_ref: str, pid: str):
 
 
 @public_api.post("/store/{client_ref}/auth/signup")
-async def public_store_signup(client_ref: str, body: ShopperSignupIn, response: Response):
+async def public_store_signup(client_ref: str, body: ShopperSignupIn):
     client = await _resolve_retailer_store(client_ref)
-    doc = await _register_public_customer(client["id"], body)
+    profile = await _public_service_profile(client["id"])
+    store_name = profile.get("name") or client.get("name") or ""
+    return await _request_public_customer_signup(client["id"], body, store_name=store_name)
+
+
+@public_api.post("/store/{client_ref}/auth/signup/verify")
+async def public_store_signup_verify(client_ref: str, body: ShopperSignupVerifyIn, response: Response):
+    client = await _resolve_retailer_store(client_ref)
+    doc = await _verify_public_customer_signup(client["id"], body)
     return _customer_auth_response(doc, client["id"], response)
+
+
+@public_api.post("/store/{client_ref}/auth/signup/resend")
+async def public_store_signup_resend(client_ref: str, body: ShopperSignupResendIn):
+    client = await _resolve_retailer_store(client_ref)
+    profile = await _public_service_profile(client["id"])
+    store_name = profile.get("name") or client.get("name") or ""
+    return await _resend_public_customer_signup(client["id"], body, store_name=store_name)
 
 
 @public_api.post("/store/{client_ref}/auth/login")
@@ -3768,6 +3951,24 @@ async def public_store_me(client_ref: str, request: Request):
     client = await _resolve_retailer_store(client_ref)
     shopper = await get_current_shopper(request, client["id"])
     return {"id": shopper["id"], "email": shopper["email"], "name": shopper.get("name", ""), "phone": shopper.get("phone", ""), "client_id": client["id"]}
+
+
+@public_api.put("/store/{client_ref}/auth/me")
+async def public_store_update_me(client_ref: str, body: ShopperProfileUpdate, request: Request):
+    client = await _resolve_retailer_store(client_ref)
+    cid = client["id"]
+    shopper = await get_current_shopper(request, cid)
+    upd: Dict[str, Any] = {}
+    if body.name is not None:
+        upd["name"] = body.name.strip()
+    if body.phone is not None:
+        upd["phone"] = body.phone.strip()
+        upd["phone_key"] = _shopper_phone_key(body.phone)
+    if not upd:
+        return {"id": shopper["id"], "email": shopper["email"], "name": shopper.get("name", ""), "phone": shopper.get("phone", ""), "client_id": cid}
+    await db.store_shoppers.update_one({"id": shopper["id"], "client_id": cid}, {"$set": upd})
+    updated = await db.store_shoppers.find_one({"id": shopper["id"], "client_id": cid}, {"_id": 0, "password_hash": 0})
+    return {"id": updated["id"], "email": updated["email"], "name": updated.get("name", ""), "phone": updated.get("phone", ""), "client_id": cid}
 
 
 @public_api.get("/store/{client_ref}/cart")
@@ -5625,6 +5826,20 @@ async def on_startup():
         await db.product_categories.create_index([("client_id", 1), ("slug", 1)], unique=True)
         await db.store_shoppers.create_index("id", unique=True)
         await db.store_shoppers.create_index([("client_id", 1), ("email", 1)], unique=True)
+        await db.store_shoppers.create_index([("client_id", 1), ("phone_key", 1)], unique=True, sparse=True)
+        await db.shopper_signup_pending.create_index([("client_id", 1), ("email", 1)], unique=True)
+        try:
+            await db.shopper_signup_pending.create_index("expires_at", expireAfterSeconds=0)
+        except Exception:
+            pass
+        try:
+            cursor = db.store_shoppers.find({"phone_key": {"$exists": False}}, {"_id": 0, "id": 1, "phone": 1})
+            async for row in cursor:
+                phone_key = _shopper_phone_key(row.get("phone"))
+                if phone_key:
+                    await db.store_shoppers.update_one({"id": row["id"]}, {"$set": {"phone_key": phone_key}})
+        except Exception:
+            pass
         await db.carts.create_index("id", unique=True)
         await db.carts.create_index([("client_id", 1), ("shopper_id", 1)], unique=True)
         await db.orders.create_index("id", unique=True)

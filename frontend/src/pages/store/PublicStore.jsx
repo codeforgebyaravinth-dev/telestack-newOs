@@ -10,6 +10,7 @@ import StoreCart from "./StoreCart";
 import StoreCheckout from "./StoreCheckout";
 import StoreOrders from "./StoreOrders";
 import StoreAuth from "./StoreAuth";
+import StoreProfile from "./StoreProfile";
 
 function StoreRoutes({ clientRef, resolvedHost, storeName }) {
   return (
@@ -22,6 +23,7 @@ function StoreRoutes({ clientRef, resolvedHost, storeName }) {
           <Route path="cart" element={<StoreCart />} />
           <Route path="checkout" element={<StoreCheckout />} />
           <Route path="orders" element={<StoreOrders />} />
+          <Route path="profile" element={<StoreProfile />} />
           <Route path="login" element={<StoreAuth />} />
           <Route path="signup" element={<StoreAuth />} />
         </Route>

@@ -12,6 +12,8 @@ import {
 import { toast } from "sonner";
 import { formatErr, resolveMediaUrl } from "../lib/api";
 import StoreBannerCarousel from "./store/StoreBannerCarousel";
+import PublicTopNav from "../components/PublicTopNav";
+import { publicSiteUrl } from "../lib/publicSiteUrl";
 
 const SECTOR_LABELS = {
   tuition: "Tuition Center",
@@ -68,7 +70,15 @@ function CourseCard({ course, onEnroll }) {
   );
 }
 
-export default function PublicGeneral({ doc, clientId, apiBase }) {
+export default function PublicGeneral({
+  doc,
+  clientId,
+  apiBase,
+  resolvedHost = null,
+  customer = null,
+  onLoginOpen,
+  onLogout,
+}) {
   const profile = doc?.profile || {};
   const courses = useMemo(() => (Array.isArray(doc?.courses) ? doc.courses : []), [doc?.courses]);
   const banners = profile.banner_slides?.length ? profile.banner_slides : [];
@@ -117,22 +127,25 @@ export default function PublicGeneral({ doc, clientId, apiBase }) {
         </div>
       )}
 
-      <header className="sticky top-0 z-30 backdrop-blur-md bg-white/80 border-b border-[#E5E7EB]/80">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#111827] text-white flex items-center justify-center">
-              <GraduationCap className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="font-display font-extrabold text-lg tracking-tight">{doc.name}</div>
-              <div className="text-[10px] uppercase tracking-[0.2em] text-[#6B7280]">{sectorLabel}</div>
-            </div>
+      <PublicTopNav
+        title={doc.name}
+        subtitle={sectorLabel}
+        siteUrl={publicSiteUrl(clientId, { resolvedHost, vertical: "general" })}
+        siteName={doc.name}
+        user={customer}
+        onSignIn={onLoginOpen}
+        onLogout={onLogout}
+        brandIcon={(
+          <div className="w-10 h-10 rounded-xl bg-[#111827] text-white flex items-center justify-center shrink-0">
+            <GraduationCap className="w-5 h-5" />
           </div>
+        )}
+        trailing={(
           <span className={`text-[11px] font-semibold uppercase tracking-wider px-3 py-1.5 rounded-full border ${isOpen ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
             {isOpen ? "Enrollments open" : "Currently closed"}
           </span>
-        </div>
-      </header>
+        )}
+      />
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-10">
         {banners.length > 0 ? (

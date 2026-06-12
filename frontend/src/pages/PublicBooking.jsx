@@ -190,9 +190,10 @@ function PublicBookingInner({ resolvedHost = null }) {
   }, [clientId, branchId, apiBase]);
 
   const isBookingVertical = doc?.vertical === "doctor" || doc?.vertical === "salon";
+  const isCustomerVertical = isBookingVertical || doc?.vertical === "general";
 
   useEffect(() => {
-    if (!customerApi || !isBookingVertical) return;
+    if (!customerApi || !isCustomerVertical) return;
     const token = localStorage.getItem(customerTokenKey(authRef));
     if (!token) {
       setCustomer(false);
@@ -202,7 +203,7 @@ function PublicBookingInner({ resolvedHost = null }) {
       localStorage.removeItem(customerTokenKey(authRef));
       setCustomer(false);
     });
-  }, [customerApi, authRef, isBookingVertical]);
+  }, [customerApi, authRef, isCustomerVertical]);
 
   useEffect(() => {
     if (!clientId || !isBookingVertical) return;
@@ -626,7 +627,20 @@ function PublicBookingInner({ resolvedHost = null }) {
   }
 
   if (doc.vertical === "general") {
-    return <PublicGeneral doc={doc} clientId={clientId} apiBase={apiBase} />;
+    return (
+      <>
+        <BookingAuthDialog open={authOpen} onOpenChange={setAuthOpen} mode={authMode} setMode={setAuthMode} onLogin={handleCustomerLogin} onSignup={handleCustomerSignup} />
+        <PublicGeneral
+          doc={doc}
+          clientId={clientId}
+          apiBase={apiBase}
+          resolvedHost={resolvedHost}
+          customer={customer}
+          onLoginOpen={() => { setAuthMode("login"); setAuthOpen(true); }}
+          onLogout={handleCustomerLogout}
+        />
+      </>
+    );
   }
 
   if (doc.vertical === "society") {
@@ -676,6 +690,7 @@ function PublicBookingInner({ resolvedHost = null }) {
         setJustBooked={setJustBooked}
         timezone={doc?.timezone}
         clientId={clientId}
+        resolvedHost={resolvedHost}
         apiBase={apiBase}
         branchId={branchId}
       />

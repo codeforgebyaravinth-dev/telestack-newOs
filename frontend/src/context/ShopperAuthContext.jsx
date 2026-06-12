@@ -32,18 +32,36 @@ export function ShopperAuthProvider({ clientRef, resolvedHost, children }) {
     refresh();
   }, [refresh]);
 
-  const login = async (email, password) => {
-    const { data } = await api.post("/auth/login", { email, password });
+  const login = async ({ email, phone, password }) => {
+    const payload = { password };
+    if (email) payload.email = email;
+    if (phone) payload.phone = phone;
+    const { data } = await api.post("/auth/login", payload);
     if (data.access_token) localStorage.setItem(tokenKey, data.access_token);
     setShopper(data.shopper);
     return data.shopper;
   };
 
-  const signup = async (payload) => {
+  const requestSignup = async (payload) => {
     const { data } = await api.post("/auth/signup", payload);
+    return data;
+  };
+
+  const verifySignup = async (email, code) => {
+    const { data } = await api.post("/auth/signup/verify", { email, code });
     if (data.access_token) localStorage.setItem(tokenKey, data.access_token);
     setShopper(data.shopper);
     return data.shopper;
+  };
+
+  const resendSignupCode = async (email) => {
+    const { data } = await api.post("/auth/signup/resend", { email });
+    return data;
+  };
+
+  const signup = async (payload) => {
+    await requestSignup(payload);
+    throw new Error("Verification required");
   };
 
   const logout = async () => {
@@ -55,7 +73,22 @@ export function ShopperAuthProvider({ clientRef, resolvedHost, children }) {
   };
 
   return (
-    <ShopperAuthContext.Provider value={{ shopper, loading, login, signup, logout, api, clientRef, resolvedHost, refresh }}>
+    <ShopperAuthContext.Provider
+      value={{
+        shopper,
+        loading,
+        login,
+        signup,
+        requestSignup,
+        verifySignup,
+        resendSignupCode,
+        logout,
+        api,
+        clientRef,
+        resolvedHost,
+        refresh,
+      }}
+    >
       {children}
     </ShopperAuthContext.Provider>
   );

@@ -36,6 +36,7 @@ ensure_env_var() {
 
 ensure_env_var "SIGNAGE_HOST_ROOT" "$ROOT_DIR"
 ensure_env_var "BOOKING_SSL_COMPOSE_ROOT" "$ROOT_DIR"
+ensure_env_var "BOOKING_DOMAIN_CNAME_TARGET" "booking.rpsignage.com"
 
 if [ ! -f "$ROOT_DIR/nginx/certs/live/rpsignage.com/fullchain.pem" ] || [ ! -f "$ROOT_DIR/nginx/certs/live/rpsignage.com/privkey.pem" ]; then
   openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
@@ -57,5 +58,11 @@ if ! printf '%s' "$CERT_CHECK_OUTPUT" | grep -q "Certificate Name: rpsignage.com
     -d rpsignage.com -d rpsignage.in
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart nginx
 fi
+
+chmod +x "$ROOT_DIR/scripts/booking-ssl.sh"
+"$ROOT_DIR/scripts/booking-ssl.sh" setup
+
+echo "Provisioning pending client booking domains (if any)..."
+"$ROOT_DIR/scripts/booking-ssl.sh" provision-all || true
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps

@@ -114,6 +114,7 @@ services:
 
   certbot:
     image: certbot/certbot:latest
+    profiles: ["tools"]
     volumes:
       - ./nginx/certs:/etc/letsencrypt
       - ./nginx/www:/var/www/certbot

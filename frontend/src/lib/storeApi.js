@@ -30,6 +30,14 @@ export function createStoreApi(clientRef, resolvedHost) {
   return instance;
 }
 
+export function storePublicUrl(clientRef, resolvedHost = null) {
+  const origin = typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "";
+  if (resolvedHost || (typeof window !== "undefined" && isCustomStoreHost(window.location.hostname))) {
+    return origin || "/";
+  }
+  return `${origin}/store/${encodeURIComponent(clientRef)}`;
+}
+
 export function storePath(clientRef, sub = "", resolvedHost = null) {
   if (resolvedHost || isCustomStoreHost(typeof window !== "undefined" ? window.location.hostname : "")) {
     return sub ? `/${sub.replace(/^\//, "")}` : "/";
