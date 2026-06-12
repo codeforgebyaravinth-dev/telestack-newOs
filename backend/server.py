@@ -1232,31 +1232,60 @@ def _shopper_verification_code() -> str:
 
 def _send_shopper_verification_email_sync(to_email: str, code: str, store_name: str) -> None:
     host = os.environ.get("SMTP_HOST", "").strip()
-    port = int(os.environ.get("SMTP_PORT", "587") or "587")
+    port_str = os.environ.get("SMTP_PORT", "465").strip()
     user = os.environ.get("SMTP_USER", "").strip()
     password = os.environ.get("SMTP_PASSWORD", "").strip()
     from_addr = os.environ.get("SMTP_FROM", user or "noreply@rpsignage.com").strip()
+    
     subject = f"Verify your email — {store_name or 'Store'}"
     body = (
         f"Your verification code is: {code}\n\n"
         f"Enter this code to complete signup at {store_name or 'the store'}.\n"
-        f"The code expires in 15 minutes.\n"
+        f"The code expires in 15 minutes.\n\n"
+        f"Thanks,\n{store_name or 'RP Signage'} Team"
     )
+    
     if not host:
         logger.warning("SMTP not configured; verification code for %s: %s", to_email, code)
         return
-    msg = MIMEText(body)
+    
+    # Parse port
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 587 if port_str == "587" else 465
+    
+    msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = from_addr
     msg["To"] = to_email
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        smtp.ehlo()
-        if os.environ.get("SMTP_TLS", "true").lower() not in ("0", "false", "no"):
-            smtp.starttls()
-            smtp.ehlo()
-        if user and password:
-            smtp.login(user, password)
-        smtp.sendmail(from_addr, [to_email], msg.as_string())
+    
+    # Check if we need SSL (port 465) or STARTTLS (other ports)
+    use_ssl = os.environ.get("SMTP_SSL", "").lower() in ("1", "true", "yes", "on") or port == 465
+    
+    try:
+        if use_ssl:
+            # SSL connection for port 465
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+                smtp.ehlo()
+                if user and password:
+                    smtp.login(user, password)
+                smtp.sendmail(from_addr, [to_email], msg.as_string())
+        else:
+            # STARTTLS connection for ports 587, 25, etc.
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                smtp.ehlo()
+                if os.environ.get("SMTP_TLS", "true").lower() not in ("0", "false", "no"):
+                    smtp.starttls()
+                    smtp.ehlo()
+                if user and password:
+                    smtp.login(user, password)
+                smtp.sendmail(from_addr, [to_email], msg.as_string())
+        
+        logger.info("Verification email sent to %s", to_email)
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", to_email, e)
+        # Don't raise - just log, the code is still displayed in logs as fallback
 
 
 async def _send_shopper_verification_email(to_email: str, code: str, store_name: str) -> None:
