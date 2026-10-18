@@ -24,9 +24,9 @@ export default function Home() {
       <header className="border-b border-white/10 sticky top-0 z-50 bg-[#070B16]/90 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="RP Signage" className="w-16 h-16 object-contain" />
+            <img src="/logo.png" alt="TelestackOS" className="w-16 h-16 object-contain" />
             <div>
-              <h1 className="text-xl font-bold">RP Signage</h1>
+              <h1 className="text-xl font-bold">TelestackOS</h1>
               <p className="text-xs text-gray-400">Digital Signage Platform</p>
             </div>
           </div>
@@ -103,7 +103,7 @@ export default function Home() {
         <div className="relative">
           <div className="absolute inset-0 bg-orange-500/20 blur-3xl rounded-full" />
           <div className="relative bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[32px] border border-white/10 p-6 shadow-2xl overflow-hidden">
-            <img src="/banner.png" alt="RP Signage displays" className="w-full rounded-2xl" />
+            <img src="/banner.png" alt="TelestackOS displays" className="w-full rounded-2xl" />
           </div>
         </div>
       </section>
@@ -111,7 +111,7 @@ export default function Home() {
       <section id="features" className="py-20 border-t border-white/10">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-14">
-            <p className="text-orange-400 font-semibold mb-3">WHY RP SIGNAGE</p>
+            <p className="text-orange-400 font-semibold mb-3">WHY TELESTACKOS</p>
             <h3 className="text-4xl font-bold mb-4">Built for Modern Digital Displays</h3>
             <p className="text-gray-400 max-w-2xl mx-auto">
               Powerful cloud dashboard with support for Android TVs, standees, USB playback and dealer management.
@@ -173,7 +173,7 @@ export default function Home() {
                   Start Your Own Digital Signage Business
                 </h3>
                 <p className="text-lg text-gray-300 mb-8 leading-relaxed">
-                  Join RP Signage dealer network and manage multiple clients with your own dashboard, wallet system and subscription plans.
+                  Join TelestackOS dealer network and manage multiple clients with your own dashboard, wallet system and subscription plans.
                 </p>
                 <div className="space-y-4 text-gray-300">
                   <div>✓ White Label Opportunity</div>
@@ -203,7 +203,7 @@ export default function Home() {
                     to="/login"
                     className="block p-5 rounded-2xl bg-orange-500 text-black font-semibold text-center text-lg hover:bg-orange-400 transition"
                   >
-                    Become RP Signage Dealer
+                    Become TelestackOS Dealer
                   </Link>
                 </div>
               </div>
@@ -216,7 +216,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto px-6 text-center">
           <h3 className="text-5xl font-bold mb-6">Ready to Control Every Screen?</h3>
           <p className="text-xl text-gray-400 mb-10">
-            Launch your digital signage network with RP Signage today.
+            Launch your digital signage network with TelestackOS today.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <Link
@@ -238,13 +238,13 @@ export default function Home() {
       <footer id="contact" className="border-t border-white/10 py-10">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between gap-8 text-gray-400">
           <div>
-            <h4 className="text-white text-2xl font-bold mb-3">RP Signage</h4>
+            <h4 className="text-white text-2xl font-bold mb-3">TelestackOS</h4>
             <p>Digital Signage Cloud Platform</p>
           </div>
           <div>
             <p>📞 9323037254</p>
             <p>📧 ravi@rp-infotech.com</p>
-            <p>🌐 rpsignage.com</p>
+            <p>🌐 telestack.dev</p>
           </div>
         </div>
       </footer>

@@ -51,7 +51,7 @@ export default function Login() {
             <div className="w-9 h-9 bg-white text-[#111827] flex items-center justify-center rounded-sm">
               <FileVideo className="w-5 h-5" />
             </div>
-            <div className="font-display font-extrabold text-xl tracking-tight">RP SIGNAGE </div>
+            <div className="font-display font-extrabold text-xl tracking-tight">TelestackOS</div>
           </div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.25em] text-white/60 mb-4">
             B2B / Control Panel · v1.0

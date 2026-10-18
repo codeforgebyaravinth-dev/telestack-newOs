@@ -83,7 +83,7 @@ export default function Layout() {
               <FileVideo className="w-4 h-4 text-white" />
             </div>
             <div>
-              <div className="font-display font-extrabold text-base tracking-tight leading-none">SIGNAGE OS</div>
+              <div className="font-display font-extrabold text-base tracking-tight leading-none">TelestackOS</div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-[#6B7280] mt-1">Control Panel</div>
             </div>
           </div>
@@ -144,7 +144,7 @@ export default function Layout() {
               <Menu className="h-5 w-5" />
             </button>
             <div className="min-w-0 text-right">
-              <div className="font-display text-sm font-extrabold tracking-tight">SIGNAGE OS</div>
+              <div className="font-display text-sm font-extrabold tracking-tight">TelestackOS</div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-[#6B7280]">Control Panel</div>
             </div>
           </div>

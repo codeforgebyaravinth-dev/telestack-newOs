@@ -1,6 +1,6 @@
 {
-  "appId": "com.rpsignage.app",
-  "appName": "RpSignage",
+  "appId": "dev.telestack.app",
+  "appName": "TelestackOS",
   "webDir": "build",
   "bundledWebRuntime": false
 }

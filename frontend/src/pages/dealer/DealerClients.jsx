@@ -37,7 +37,7 @@ function isValidGst(value) {
   return !text || GST_RE.test(text);
 }
 
-const BOOKING_CNAME_TARGET = "booking.rpsignage.com";
+const BOOKING_CNAME_TARGET = "booking.telestack.dev";
 
 const empty = {
   name: "", email: "", password: "", phone: "", gst_number: "", address: "",

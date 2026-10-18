@@ -1540,7 +1540,7 @@ async def _resolve_public_client_ref(ref: str) -> dict:
 
 
 _BOOKING_DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
-BOOKING_DOMAIN_CNAME_TARGET = os.environ.get("BOOKING_DOMAIN_CNAME_TARGET", "booking.rpsignage.com").strip().lower()
+BOOKING_DOMAIN_CNAME_TARGET = os.environ.get("BOOKING_DOMAIN_CNAME_TARGET", "booking.telestack.dev").strip().lower()
 BOOKING_DOMAIN_TARGET_IP = os.environ.get("BOOKING_DOMAIN_TARGET_IP", "").strip()
 BOOKING_DOMAINS_DIR = os.environ.get("BOOKING_DOMAINS_DIR", "").strip()
 BOOKING_SSL_COMPOSE_ROOT = os.environ.get("BOOKING_SSL_COMPOSE_ROOT", "").strip()
@@ -1557,7 +1557,7 @@ def _booking_auto_provision_enabled() -> bool:
 
 
 def _platform_booking_hosts() -> set:
-    hosts = {"rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"}
+    hosts = {"telestack.dev", "console.telestack.dev", "rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"}
     frontend = os.environ.get("FRONTEND_URL", "")
     for item in frontend.split(","):
         item = item.strip()

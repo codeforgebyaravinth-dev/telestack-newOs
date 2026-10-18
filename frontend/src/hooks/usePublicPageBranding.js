@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { resolveMediaUrl } from "../lib/api";
 
-const DEFAULT_TITLE = "RP Signage | Digital Signage Software, Token System, LED Video Wall & TV Solutions";
+const DEFAULT_TITLE = "TelestackOS | Digital Signage Software, Token System, LED Video Wall & TV Solutions";
 const DEFAULT_FAVICON = "/logo.png";
 
 export function usePublicPageBranding(pageTitle, logoUrl) {
