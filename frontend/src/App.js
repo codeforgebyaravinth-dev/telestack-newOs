@@ -60,7 +60,14 @@ function ProtectedRoute({ role, children }) {
   return children;
 }
 
-const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+const PLATFORM_HOSTS = new Set([
+  "rpsignage.com",
+  "rpsignage.in",
+  "localhost",
+  "127.0.0.1",
+  "telestack.dev",
+  "console.telestack.dev",
+]);
 
 function isCustomBookingHost() {
   if (typeof window === "undefined") return false;

@@ -1,10 +1,30 @@
 import axios from "axios";
 
-const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+const PLATFORM_HOSTS = new Set([
+  "rpsignage.com",
+  "rpsignage.in",
+  "localhost",
+  "127.0.0.1",
+  "telestack.dev",
+  "console.telestack.dev",
+]);
 
 export function isCustomStoreHost(hostname) {
   const host = String(hostname || "").toLowerCase();
-  return host && !PLATFORM_HOSTS.has(host);
+  if (!host || PLATFORM_HOSTS.has(host)) return false;
+  if (
+    host === "console.telestack.dev" ||
+    host === "telestack.dev" ||
+    host.endsWith(".onrender.com") ||
+    host.endsWith(".render.com") ||
+    host.includes("render.com") ||
+    host.endsWith(".vercel.app") ||
+    host.endsWith(".netlify.app") ||
+    host.endsWith(".pages.dev")
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function publicStoreBase(resolvedHost) {

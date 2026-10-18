@@ -15,7 +15,14 @@ import PublicGeneral from "./PublicGeneral";
 import PublicSalonDoctor from "./PublicSalonDoctor";
 import PublicStudio from "./PublicStudio";
 
-const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
+const PLATFORM_HOSTS = new Set([
+  "rpsignage.com",
+  "rpsignage.in",
+  "localhost",
+  "127.0.0.1",
+  "telestack.dev",
+  "console.telestack.dev",
+]);
 
 function isCustomBookingHost(hostname) {
   return isCustomPublicHost(hostname);
@@ -122,7 +129,11 @@ function PublicBookingInner({ resolvedHost = null }) {
           ? `${apiBase}/providers/${clientId}/branches/${encodeURIComponent(branchId)}`
           : `${apiBase}/providers/${clientId}`;
         const { data } = await axios.get(url);
-        if (mounted) setDoc(data);
+        if (data && typeof data === "object" && data.id) {
+          if (mounted) setDoc(data);
+        } else {
+          if (mounted) setDoc(false);
+        }
       } catch {
         if (mounted) setDoc(false);
       } finally {
