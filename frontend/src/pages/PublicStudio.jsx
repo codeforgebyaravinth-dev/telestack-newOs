@@ -35,82 +35,14 @@ export default function PublicStudio({
   const [galleryFilter, setGalleryFilter] = useState("All");
   const [lightboxItem, setLightboxItem] = useState(null);
 
-  const defaultGallery = useMemo(() => [
-    {
-      id: "gal-1",
-      title: "Royal Traditional Wedding",
-      category: "Wedding",
-      image_url: "https://images.unsplash.com/photo-1583939003579-730e3918a45a?auto=format&fit=crop&w=800&q=80",
-      description: "Traditional rituals captured with cinematic depth and emotional focus.",
-      featured: true,
-    },
-    {
-      id: "gal-2",
-      title: "Candid Outdoor Pre-Wedding",
-      category: "Candid",
-      image_url: "https://images.unsplash.com/photo-1533038590840-1cde6e668a91?auto=format&fit=crop&w=800&q=80",
-      description: "Golden hour sunset romance captured in high dynamic range.",
-      featured: true,
-    },
-    {
-      id: "gal-3",
-      title: "Aerial Temple Mandap Shot",
-      category: "Drone",
-      image_url: "https://images.unsplash.com/photo-1508614589041-895b88991e3e?auto=format&fit=crop&w=800&q=80",
-      description: "Bird-eye drone perspective of grand marriage festivities.",
-      featured: true,
-    },
-    {
-      id: "gal-4",
-      title: "Customised Magic Mug & Cushion",
-      category: "Gifts",
-      image_url: "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=800&q=80",
-      description: "High-gloss thermal dye sublimation printing on premium porcelain.",
-      featured: true,
-    },
-    {
-      id: "gal-5",
-      title: "Classic Studio Portrait",
-      category: "Studio",
-      image_url: "https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80",
-      description: "Three-point softbox studio lighting for portraiture.",
-      featured: false,
-    },
-    {
-      id: "gal-6",
-      title: "Professional Camera Rig Behind The Scenes",
-      category: "Candid",
-      image_url: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80",
-      description: "State-of-the-art Sony FX series & motorized gimbal setup.",
-      featured: false,
-    },
-    {
-      id: "gal-7",
-      title: "Premium Photo Frame Installation",
-      category: "Gifts",
-      image_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80",
-      description: "Custom Teakwood & synthetic framing with anti-glare lamination.",
-      featured: false,
-    },
-    {
-      id: "gal-8",
-      title: "Grand Reception Stage Panorama",
-      category: "Wedding",
-      image_url: "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80",
-      description: "Vibrant floral stage lighting with ultra-wide angle prime lens.",
-      featured: true,
-    },
-  ], []);
-
   const galleryItems = useMemo(() => {
     const raw = Array.isArray(studioProfile?.gallery) && studioProfile.gallery.length
       ? studioProfile.gallery
       : Array.isArray(profile?.gallery) && profile.gallery.length
       ? profile.gallery
       : [];
-    if (raw.length) return raw;
-    return defaultGallery;
-  }, [studioProfile?.gallery, profile?.gallery, defaultGallery]);
+    return raw;
+  }, [studioProfile?.gallery, profile?.gallery]);
 
   // Real backend services or authentic fallbacks matching reference
   const services = useMemo(() => {
@@ -184,77 +116,14 @@ export default function PublicStudio({
     ];
   }, [profile.services, studioProfile.services]);
 
-  // Real backend products or authentic fallbacks
+  // Real backend products added from client dashboard only
   const products = useMemo(() => {
-    const raw = Array.isArray(doc?.products) ? doc.products : [];
-    if (raw.length) return raw;
-    return [
-      {
-        id: "prod-magic-mug",
-        name: "Customised Magic Coffee Mug",
-        category: "Customised Gifts",
-        price: 399,
-        stock: 100,
-        description: "Colour-changing ceramic mug that reveals your high-resolution custom photo when hot liquid is poured.",
-        image_url: "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-magic-pillow",
-        name: "Heart Sequins Magic Pillow",
-        category: "Customised Gifts",
-        price: 799,
-        stock: 50,
-        description: "Sparkling reversible sequin heart pillow with your favourite photo printed on one side.",
-        image_url: "https://images.unsplash.com/photo-1584100936595-c0654b55a2e2?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-wood-frame",
-        name: "Premium Matte Wooden Photo Frame (12x18)",
-        category: "Photo Frames",
-        price: 1299,
-        stock: 80,
-        description: "Handcrafted solid teakwood frame with unbreakable matte lamination and museum-grade archival photo print.",
-        image_url: "https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-acrylic-frame",
-        name: "Ultra HD Acrylic Floating Wall Frame (16x24)",
-        category: "Photo Frames",
-        price: 2499,
-        stock: 40,
-        description: "Glossy 5mm imported acrylic print with bevelled diamond-polished edges and stainless-steel wall mounts.",
-        image_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-keychain",
-        name: "Metal & Wood Customised Keychain",
-        category: "Customised Gifts",
-        price: 149,
-        stock: 200,
-        description: "Double-sided laser engraved metallic and wooden keychain with your custom portrait or quote.",
-        image_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-tshirt",
-        name: "Personalised 100% Cotton Printed T-Shirt",
-        category: "Customised Gifts",
-        price: 599,
-        stock: 120,
-        description: "Bio-washed 220 GSM pure cotton tee with vibrant DTF photography printing for birthdays and family occasions.",
-        image_url: "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      }
-    ];
+    return Array.isArray(doc?.products) ? doc.products : [];
   }, [doc?.products]);
 
   // Sourced and categorized products for Gifts and Frames
   const giftProducts = useMemo(() => {
-    const list = products.filter((p) => {
+    return products.filter((p) => {
       const cat = (p.category_id || p.category || "").toLowerCase();
       const name = (p.name || "").toLowerCase();
       const tags = Array.isArray(p.tags) ? p.tags.join(" ").toLowerCase() : "";
@@ -263,59 +132,15 @@ export default function PublicStudio({
       }
       return true;
     });
-    return list.length > 0 ? list : products;
   }, [products]);
 
   const frameProducts = useMemo(() => {
-    const list = products.filter((p) => {
+    return products.filter((p) => {
       const cat = (p.category_id || p.category || "").toLowerCase();
       const name = (p.name || "").toLowerCase();
       const tags = Array.isArray(p.tags) ? p.tags.join(" ").toLowerCase() : "";
       return cat === "cat-frames" || cat.includes("frame") || name.includes("frame") || name.includes("wall") || tags.includes("frame");
     });
-    if (list.length > 0) return list;
-    return [
-      {
-        id: "prod-wood-frame",
-        name: "Teakwood Matte Wooden Frame (12x18)",
-        category: "Photo Frames",
-        category_id: "cat-frames",
-        price: 1299,
-        description: "Classic museum finish teakwood frame with scratch-proof matte photo lamination.",
-        image_url: "https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-acrylic-frame",
-        name: "Ultra HD Acrylic Wall Glass Frame (16x24)",
-        category: "Photo Frames",
-        category_id: "cat-frames",
-        price: 2499,
-        description: "Glossy floating acrylic print with steel edge mounts for luxury home interiors.",
-        image_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-family-mosaic",
-        name: "Family Collage Mosaic Frame (20x30)",
-        category: "Photo Frames",
-        category_id: "cat-frames",
-        price: 3499,
-        description: "Bring 30 to 50 family photos together in a majestic high-resolution collage mosaic.",
-        image_url: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      },
-      {
-        id: "prod-photo-restoration",
-        name: "Digital Photo Restoration & Re-Framing",
-        category: "Photo Frames",
-        category_id: "cat-frames",
-        price: 899,
-        description: "Old torn or faded photos restored digitally and reprinted in crystal clear archival clarity.",
-        image_url: "https://images.unsplash.com/photo-1583939003579-730e3918a45a?auto=format&fit=crop&w=800&q=80",
-        customizable: true
-      }
-    ];
   }, [products]);
 
   // Authentic studio offers & packages
@@ -1094,29 +919,36 @@ export default function PublicStudio({
               </Button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-              {galleryItems.slice(0, 6).map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => setLightboxItem(item)}
-                  className="group relative rounded-xl overflow-hidden aspect-square bg-gray-100 cursor-pointer shadow-xs hover:shadow-md transition-all"
-                >
-                  <img
-                    src={resolveMediaUrl(item.image_url)}
-                    alt={item.title || "Studio Shoot"}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2.5 text-white">
-                    <span className="text-[9px] font-bold uppercase tracking-wider bg-black/60 backdrop-blur-xs text-white px-1.5 py-0.5 rounded self-start">
-                      {item.category}
-                    </span>
-                    <div>
-                      <p className="text-[11px] font-bold line-clamp-1">{item.title}</p>
+            {galleryItems.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                {galleryItems.slice(0, 6).map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => setLightboxItem(item)}
+                    className="group relative rounded-xl overflow-hidden aspect-square bg-gray-100 cursor-pointer shadow-xs hover:shadow-md transition-all"
+                  >
+                    <img
+                      src={resolveMediaUrl(item.image_url)}
+                      alt={item.title || "Studio Shoot"}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2.5 text-white">
+                      <span className="text-[9px] font-bold uppercase tracking-wider bg-black/60 backdrop-blur-xs text-white px-1.5 py-0.5 rounded self-start">
+                        {item.category}
+                      </span>
+                      <div>
+                        <p className="text-[11px] font-bold line-clamp-1">{item.title}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-12 text-center border border-dashed border-gray-200 rounded-2xl bg-gray-50/50">
+                <ImageIcon className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs text-gray-500 font-medium">Gallery photos will appear here once uploaded from the client dashboard.</p>
+              </div>
+            )}
           </section>
         </div>
       )}
@@ -1913,51 +1745,61 @@ export default function PublicStudio({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-            {giftProducts.map((p) => (
-              <div
-                key={p.id}
-                className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between"
-              >
-                <div className="h-44 bg-gray-100 relative overflow-hidden group">
-                  <img
-                    src={p.image_url ? resolveMediaUrl(p.image_url) : "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=600&q=80"}
-                    alt={p.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <span className="absolute top-2.5 right-2.5 bg-amber-500 text-black text-[10px] font-black uppercase px-2 py-0.5 rounded-full shadow-md">
-                    Custom Photo Ready
-                  </span>
-                </div>
-
-                <div className="p-4 flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">
-                      {p.category || "Personalised Gift"}
-                    </div>
-                    <h3 className="font-extrabold text-sm text-gray-900 mt-0.5 line-clamp-1">{p.name}</h3>
-                    <p className="text-xs text-gray-600 mt-1 leading-relaxed line-clamp-2">
-                      {p.description}
-                    </p>
+          {giftProducts.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+              {giftProducts.map((p) => (
+                <div
+                  key={p.id}
+                  className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between"
+                >
+                  <div className="h-44 bg-gray-100 relative overflow-hidden group">
+                    <img
+                      src={p.image_url ? resolveMediaUrl(p.image_url) : "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=600&q=80"}
+                      alt={p.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <span className="absolute top-2.5 right-2.5 bg-amber-500 text-black text-[10px] font-black uppercase px-2 py-0.5 rounded-full shadow-md">
+                      Custom Photo Ready
+                    </span>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                  <div className="p-4 flex-1 flex flex-col justify-between">
                     <div>
-                      <div className="text-[10px] text-gray-400 uppercase">Starting at</div>
-                      <div className="text-base font-black text-gray-900">₹{Number(p.price || 0).toLocaleString()}</div>
+                      <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">
+                        {p.category || "Personalised Gift"}
+                      </div>
+                      <h3 className="font-extrabold text-sm text-gray-900 mt-0.5 line-clamp-1">{p.name}</h3>
+                      <p className="text-xs text-gray-600 mt-1 leading-relaxed line-clamp-2">
+                        {p.description}
+                      </p>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => setCustomizingProduct(p)}
-                      className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl h-8 px-3"
-                    >
-                      Customise & Order →
-                    </Button>
+
+                    <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] text-gray-400 uppercase">Starting at</div>
+                        <div className="text-base font-black text-gray-900">₹{Number(p.price || 0).toLocaleString()}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => setCustomizingProduct(p)}
+                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl h-8 px-3"
+                      >
+                        Customise & Order →
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-20 text-center border-2 border-dashed border-gray-200 rounded-3xl bg-gray-50/70 p-8 max-w-xl mx-auto">
+              <Gift className="w-12 h-12 text-amber-500/80 mx-auto mb-3" />
+              <h3 className="font-extrabold text-lg text-gray-900 font-display">No Customised Gift Products Added Yet</h3>
+              <p className="text-xs sm:text-sm text-gray-500 mt-2 leading-relaxed">
+                Products added from your client dashboard with category &ldquo;Customised Gifts&rdquo; will automatically appear here.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -1980,51 +1822,61 @@ export default function PublicStudio({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-            {frameProducts.map((f) => (
-              <div
-                key={f.id}
-                className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between"
-              >
-                <div className="h-44 bg-gray-100 relative overflow-hidden group">
-                  <img
-                    src={f.image_url ? resolveMediaUrl(f.image_url) : "https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80"}
-                    alt={f.name || f.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <span className="absolute top-2.5 right-2.5 bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] font-black uppercase px-2 py-0.5 rounded-full shadow-md">
-                    Custom Framing
-                  </span>
-                </div>
-
-                <div className="p-4 flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">
-                      {f.category || "Photo Frame"}
-                    </div>
-                    <h3 className="font-extrabold text-sm text-gray-900 mt-0.5 line-clamp-1">{f.name || f.title}</h3>
-                    <p className="text-xs text-gray-600 mt-1 leading-relaxed line-clamp-2">
-                      {f.description || f.desc}
-                    </p>
+          {frameProducts.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+              {frameProducts.map((f) => (
+                <div
+                  key={f.id}
+                  className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between"
+                >
+                  <div className="h-44 bg-gray-100 relative overflow-hidden group">
+                    <img
+                      src={f.image_url ? resolveMediaUrl(f.image_url) : "https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80"}
+                      alt={f.name || f.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <span className="absolute top-2.5 right-2.5 bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] font-black uppercase px-2 py-0.5 rounded-full shadow-md">
+                      Custom Framing
+                    </span>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                  <div className="p-4 flex-1 flex flex-col justify-between">
                     <div>
-                      <div className="text-[10px] text-gray-400 uppercase">Starting at</div>
-                      <div className="text-base font-black text-gray-900">₹{Number(f.price || 0).toLocaleString()}</div>
+                      <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">
+                        {f.category || "Photo Frame"}
+                      </div>
+                      <h3 className="font-extrabold text-sm text-gray-900 mt-0.5 line-clamp-1">{f.name || f.title}</h3>
+                      <p className="text-xs text-gray-600 mt-1 leading-relaxed line-clamp-2">
+                        {f.description || f.desc}
+                      </p>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => setCustomizingProduct(f)}
-                      className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl h-8 px-3"
-                    >
-                      Customise & Order →
-                    </Button>
+
+                    <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] text-gray-400 uppercase">Starting at</div>
+                        <div className="text-base font-black text-gray-900">₹{Number(f.price || 0).toLocaleString()}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => setCustomizingProduct(f)}
+                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl h-8 px-3"
+                      >
+                        Customise & Order →
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-20 text-center border-2 border-dashed border-gray-200 rounded-3xl bg-gray-50/70 p-8 max-w-xl mx-auto">
+              <Camera className="w-12 h-12 text-amber-500/80 mx-auto mb-3" />
+              <h3 className="font-extrabold text-lg text-gray-900 font-display">No Photo Frame Products Added Yet</h3>
+              <p className="text-xs sm:text-sm text-gray-500 mt-2 leading-relaxed">
+                Products added from your client dashboard with category &ldquo;Photo Frames&rdquo; will automatically appear here.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
