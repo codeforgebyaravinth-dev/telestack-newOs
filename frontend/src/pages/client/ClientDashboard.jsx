@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import PageHeader from "../../components/PageHeader";
 import KpiCard from "../../components/KpiCard";
-import { Monitor, FileVideo, Wallet, CalendarCheck, Package, Building, HardDrive, ShieldCheck, CalendarClock, GraduationCap, ClipboardList } from "lucide-react";
+import { Monitor, FileVideo, Wallet, CalendarCheck, Package, Building, HardDrive, ShieldCheck, CalendarClock, GraduationCap, ClipboardList, Camera, ShoppingBag, ExternalLink, Sparkles } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { } from "../../lib/utils";
 
-const VERTICAL_LABELS = { general: "Academy", doctor: "Doctor", salon: "Salon", retailer: "Retailer", society: "Society" };
+const VERTICAL_LABELS = { general: "Academy", doctor: "Doctor", salon: "Salon", retailer: "Retailer", society: "Society", studio: "Photography Studio" };
 
 function formatDateTime(value) {
   if (!value) return "—";
@@ -52,6 +52,32 @@ export default function ClientDashboard() {
     <div data-testid="client-dashboard">
       <PageHeader overline={`Client / ${VERTICAL_LABELS[stats?.vertical] || "General"}`} title={`Hi, ${user?.name}.`} subtitle="Manage your screens, templates and storefront in one place." />
 
+      {stats?.vertical === "studio" && (
+        <div className="mb-6 rounded-2xl bg-gradient-to-r from-[#111827] via-[#1A2234] to-[#111827] p-5 text-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border border-amber-500/30 shadow-lg">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30 flex-shrink-0">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-amber-400 uppercase tracking-widest">Live Studio Website</div>
+              <h3 className="text-lg font-black font-display tracking-tight text-white">Your Public Photography & Gifts Storefront</h3>
+              <p className="text-xs text-gray-300 mt-0.5">Customers can browse your photo packages, customize gifts, order frames and connect on WhatsApp.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={`/book/${user?.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black font-extrabold text-xs px-5 py-2.5 rounded-xl shadow-md transition-all transform hover:scale-105"
+            >
+              <span>View Public Studio Site</span>
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
         <KpiCard label="Devices" value={stats?.devices ?? "—"} hint={`${stats?.paired ?? 0} paired`} Icon={Monitor} accent="#002FA7" testid="kpi-devices" />
         <KpiCard label="Templates" value={stats?.templates ?? "—"} hint="Available layouts" Icon={FileVideo} accent="#F59E0B" testid="kpi-templates" />
@@ -59,6 +85,14 @@ export default function ClientDashboard() {
         <KpiCard label="Storage" value={`${stats?.storage_used_gb ?? 0} / ${stats?.storage_limit_gb ?? 0} GB`} hint={`${stats?.storage_remaining_gb ?? 0} GB remaining`} Icon={HardDrive} accent="#7C3AED" testid="kpi-storage" />
         {(stats?.vertical === "doctor" || stats?.vertical === "salon") && (
           <KpiCard label="Appointments today" value={stats?.appointments_today ?? 0} hint="Live queue" Icon={CalendarCheck} testid="kpi-apts" />
+        )}
+        {stats?.vertical === "studio" && (
+          <>
+            <KpiCard label="Shoots today" value={stats?.shoots_today ?? 0} hint="Scheduled sessions" Icon={Camera} accent="#EAB308" testid="kpi-shoots" />
+            <KpiCard label="Total shoots" value={stats?.shoots_total ?? 0} hint="All bookings" Icon={CalendarCheck} testid="kpi-shoots-total" />
+            <KpiCard label="Products" value={stats?.products ?? 0} hint="Gifts & frames" Icon={Package} testid="kpi-products" />
+            <KpiCard label="Pending orders" value={stats?.orders_pending ?? 0} hint="Awaiting fulfillment" Icon={ShoppingBag} accent="#EF4444" testid="kpi-orders" />
+          </>
         )}
         {stats?.vertical === "retailer" && (
           <KpiCard label="Products" value={stats?.products ?? 0} hint="In your catalog" Icon={Package} testid="kpi-products" />

@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import {
   LayoutDashboard, Users, FileVideo, Building2, LogOut, ShieldCheck, Store,
   Layers, Monitor, Store as StoreIcon, UserCircle, Image as ImageIcon, ListMusic, Calendar,
-  Wallet, Menu,
+  Wallet, Menu, Camera,
 } from "lucide-react";
 import { Button } from "./ui/button";
 
@@ -38,12 +38,25 @@ const CLIENT_NAV = [
   { to: "/client/storefront", label: "Storefront", Icon: StoreIcon },
 ];
 
+const STUDIO_NAV = [
+  { to: "/client", label: "Dashboard", Icon: LayoutDashboard, end: true },
+  { to: "/client/storefront", label: "Studio & Store", Icon: Camera },
+  { to: "/client/media", label: "Media Library", Icon: ImageIcon },
+  { to: "/client/payments", label: "Payments", Icon: Wallet },
+];
+
 export default function Layout() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const items = user?.role === "admin" ? ADMIN_NAV : user?.role === "dealer" ? DEALER_NAV : CLIENT_NAV;
+  const items = user?.role === "admin"
+    ? ADMIN_NAV
+    : user?.role === "dealer"
+      ? DEALER_NAV
+      : user?.vertical === "studio"
+        ? STUDIO_NAV
+        : CLIENT_NAV;
   const RoleIcon = user?.role === "admin" ? ShieldCheck : user?.role === "dealer" ? Store : UserCircle;
 
   useEffect(() => {

@@ -19,6 +19,7 @@ const VERTICALS = [
   { value: "salon", label: "Salon / Spa" },
   { value: "retailer", label: "Retailer" },
   { value: "society", label: "Society / Apartment" },
+  { value: "studio", label: "Photography Studio" },
 ];
 
 const verticalLabel = (value) => VERTICALS.find((v) => v.value === (value || "general"))?.label || value;

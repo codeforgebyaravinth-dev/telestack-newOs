@@ -13,6 +13,7 @@ import {
 } from "../lib/publicCustomerApi";
 import PublicGeneral from "./PublicGeneral";
 import PublicSalonDoctor from "./PublicSalonDoctor";
+import PublicStudio from "./PublicStudio";
 
 const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "127.0.0.1"]);
 
@@ -137,7 +138,7 @@ function PublicBookingInner({ resolvedHost = null }) {
     };
   }, [clientId, branchId, apiBase]);
 
-  const isBookingVertical = doc?.vertical === "doctor" || doc?.vertical === "salon";
+  const isBookingVertical = doc?.vertical === "doctor" || doc?.vertical === "salon" || doc?.vertical === "studio";
   const isCustomerVertical = isBookingVertical || doc?.vertical === "general";
 
   usePublicPageBranding(doc?.name || "", doc?.profile?.image_url || "");
@@ -598,6 +599,23 @@ function PublicBookingInner({ resolvedHost = null }) {
       onResendSignupCode={handleCustomerSignupResend}
     />
   );
+
+  if (doc.vertical === "studio") {
+    return (
+      <>
+        {authDialog}
+        <PublicStudio
+          doc={doc}
+          clientId={clientId}
+          apiBase={apiBase}
+          resolvedHost={resolvedHost}
+          customer={customer}
+          onLoginOpen={() => { setAuthMode("login"); setAuthOpen(true); }}
+          onLogout={handleCustomerLogout}
+        />
+      </>
+    );
+  }
 
   if (doc.vertical === "general") {
     return (

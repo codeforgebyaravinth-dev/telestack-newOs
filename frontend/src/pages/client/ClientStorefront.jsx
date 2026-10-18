@@ -10,9 +10,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import { Plus, Pencil, Trash2, Stethoscope, Package, Building, Copy, Scissors, Megaphone, X, ShoppingCart, FolderTree, Images, ArrowUp, ArrowDown, GraduationCap, Search } from "lucide-react";
+import { Plus, Pencil, Trash2, Stethoscope, Package, Building, Copy, Scissors, Megaphone, X, ShoppingCart, FolderTree, Images, ArrowUp, ArrowDown, GraduationCap, Search, Camera } from "lucide-react";
 import { Checkbox } from "../../components/ui/checkbox";
 import GeneralStorefrontPanel from "./GeneralStorefrontPanel";
+import StudioStorefrontPanel from "./StudioStorefrontPanel";
 import { toast } from "sonner";
 import { formatOrderDelivery, orderDeliverySearchText, orderFulfillmentType } from "../../lib/orderFulfillment";
 
@@ -1774,6 +1775,13 @@ export default function ClientStorefront() {
       subtitle: "Run tuition centers, academies, coaching, and training programs with a professional public page.",
       icon: GraduationCap,
       panel: <GeneralStorefrontPanel />,
+    },
+    studio: {
+      overline: "Storefront / Photography Studio",
+      title: "Studio & Store Console.",
+      subtitle: "Manage photography packages, custom merchandise, shoot bookings, and print orders in one place.",
+      icon: Camera,
+      panel: <StudioStorefrontPanel />,
     },
   }), []);
 

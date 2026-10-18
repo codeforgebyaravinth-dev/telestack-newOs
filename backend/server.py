@@ -32,7 +32,7 @@ import asyncio
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from botocore.exceptions import ClientError, BotoCoreError
 import io
 import base64
@@ -57,7 +57,7 @@ public_api = APIRouter(prefix="/api/public")
 
 JWT_ALGO = "HS256"
 PLAN_TYPES = ("cloud", "usb", "hybrid")
-VERTICALS = ("general", "doctor", "salon", "retailer", "society")
+VERTICALS = ("general", "doctor", "salon", "retailer", "society", "studio")
 
 
 def _normalize_vertical(value: Optional[str]) -> str:
@@ -541,7 +541,7 @@ class PlanIn(BaseModel):
     price: float = 0.0
     storage_limit_gb: float = 0.0
     device_limit: int = Field(default=0, ge=0)
-    vertical: Literal["general", "doctor", "salon", "retailer", "society"] = "general"
+    vertical: Literal["general", "doctor", "salon", "retailer", "society", "studio"] = "general"
     duration_days: Optional[int] = None
     description: str = ""
     features: List[str] = []
@@ -553,7 +553,7 @@ class PlanUpdate(BaseModel):
     price: Optional[float] = None
     storage_limit_gb: Optional[float] = None
     device_limit: Optional[int] = Field(default=None, ge=0)
-    vertical: Optional[Literal["general", "doctor", "salon", "retailer", "society"]] = None
+    vertical: Optional[Literal["general", "doctor", "salon", "retailer", "society", "studio"]] = None
     duration_days: Optional[int] = None
     description: Optional[str] = None
     features: Optional[List[str]] = None
@@ -615,7 +615,7 @@ class ClientCreate(BaseModel):
     phone: str = ""; gst_number: str = ""; address: str = ""
     plan: Literal["cloud", "usb", "hybrid"] = "cloud"
     plan_id: Optional[str] = None
-    vertical: Literal["general", "doctor", "salon", "retailer", "society"] = "general"
+    vertical: Literal["general", "doctor", "salon", "retailer", "society", "studio"] = "general"
     wallet_balance: float = 0.0
     assigned_template_ids: List[str] = []
     custom_booking_domain: Optional[str] = None
@@ -627,7 +627,7 @@ class ClientUpdate(BaseModel):
     address: Optional[str] = None
     plan: Optional[Literal["cloud", "usb", "hybrid"]] = None
     plan_id: Optional[str] = None
-    vertical: Optional[Literal["general", "doctor", "salon", "retailer", "society"]] = None
+    vertical: Optional[Literal["general", "doctor", "salon", "retailer", "society", "studio"]] = None
     assigned_template_ids: Optional[List[str]] = None
     status: Optional[Literal["active", "suspended", "pending"]] = None
     dealer_id: Optional[str] = None
@@ -792,6 +792,7 @@ class ServiceItem(BaseModel):
 
 
 class DoctorProfile(BaseModel):
+    model_config = ConfigDict(extra="allow")
     specialty: str = ""
     qualifications: str = ""
     fee: float = 0.0
@@ -801,6 +802,34 @@ class DoctorProfile(BaseModel):
     description: str = ""
     slot_minutes: int = 15
     services: List[ServiceItem] = Field(default_factory=list)
+    gallery: List[dict] = Field(default_factory=list)
+    offers: List[dict] = Field(default_factory=list)
+
+
+class StudioGalleryItem(BaseModel):
+    id: Optional[str] = None
+    title: str = ""
+    category: str = "Wedding"
+    image_url: str
+    description: Optional[str] = ""
+    featured: bool = False
+    created_at: Optional[str] = None
+
+
+class StudioOfferItem(BaseModel):
+    id: Optional[str] = None
+    title: str = ""
+    badge: str = "FESTIVE COMBO"
+    original_price: float = 0.0
+    offer_price: float = 0.0
+    coupon_code: str = ""
+    valid_until: str = ""
+    description: str = ""
+    deliverables: str = ""
+    image_url: Optional[str] = ""
+    active: bool = True
+    featured_banner: bool = True
+    created_at: Optional[str] = None
 
 class AppointmentCreate(BaseModel):
     patient_name: str
@@ -1210,7 +1239,7 @@ async def _resolve_retailer_store(client_ref: str) -> dict:
 
 async def _resolve_booking_provider(client_ref: str) -> dict:
     client = await _resolve_public_client_ref(client_ref)
-    if client.get("vertical") not in ("doctor", "salon"):
+    if client.get("vertical") not in ("doctor", "salon", "studio"):
         raise HTTPException(status_code=404, detail="Booking not available for this provider")
     return client
 
@@ -1476,7 +1505,7 @@ def _service_profile_field(vertical: str) -> str:
 
 
 def _service_label(vertical: str) -> str:
-    return "Doctor" if vertical == "doctor" else "Salon" if vertical == "salon" else vertical.title()
+    return "Doctor" if vertical == "doctor" else "Salon" if vertical == "salon" else "Studio" if vertical == "studio" else vertical.title()
 
 
 def _slugify_public_ref(value: str) -> str:
@@ -1864,7 +1893,7 @@ async def _apply_custom_booking_domain_update(
 
 def _infer_appointment_vertical(appointment: dict, client_doc: dict) -> str:
     stored = _normalize_vertical(appointment.get("vertical"))
-    if stored in ("doctor", "salon"):
+    if stored in ("doctor", "salon", "studio"):
         return stored
     sid = str(appointment.get("service_id") or "").strip()
     service_ids = [str(x).strip() for x in (appointment.get("service_ids") or []) if str(x).strip()]
@@ -1878,18 +1907,25 @@ def _infer_appointment_vertical(appointment: dict, client_doc: dict) -> str:
         for s in (client_doc.get("salon_profile") or {}).get("services") or []
         if isinstance(s, dict) and s.get("id")
     }
+    studio_ids = {
+        str(s.get("id") or "").strip()
+        for s in (client_doc.get("studio_profile") or {}).get("services") or []
+        if isinstance(s, dict) and s.get("id")
+    }
     check_ids = ([sid] if sid else []) + service_ids
     for item_id in check_ids:
         if item_id in doctor_ids:
             return "doctor"
         if item_id in salon_ids:
             return "salon"
+        if item_id in studio_ids:
+            return "studio"
     return _normalize_vertical(client_doc.get("vertical"))
 
 
 def _appointment_matches_vertical(appointment: dict, client_doc: dict, vertical: str) -> bool:
     target = _normalize_vertical(vertical)
-    if target not in ("doctor", "salon"):
+    if target not in ("doctor", "salon", "studio"):
         return True
     return _infer_appointment_vertical(appointment, client_doc) == target
 
@@ -1931,6 +1967,28 @@ def _normalize_service_catalog(profile: dict, vertical: str) -> dict:
             row["image_url"] = _absolute_media_url(str(row.get("image_url") or ""))
         cleaned.append(row)
     normalized["services"] = cleaned
+    gallery = normalized.get("gallery") or []
+    if isinstance(gallery, list):
+        cleaned_gallery = []
+        for g in gallery:
+            if not isinstance(g, dict):
+                continue
+            grow = dict(g)
+            if grow.get("image_url"):
+                grow["image_url"] = _absolute_media_url(str(grow.get("image_url") or ""))
+            cleaned_gallery.append(grow)
+        normalized["gallery"] = cleaned_gallery
+    offers = normalized.get("offers") or []
+    if isinstance(offers, list):
+        cleaned_offers = []
+        for o in offers:
+            if not isinstance(o, dict):
+                continue
+            orow = dict(o)
+            if orow.get("image_url"):
+                orow["image_url"] = _absolute_media_url(str(orow.get("image_url") or ""))
+            cleaned_offers.append(orow)
+        normalized["offers"] = cleaned_offers
     return normalized
 
 # ---------------- Auth Endpoints ----------------
@@ -2397,6 +2455,12 @@ async def client_stats(user: dict = Depends(require_role("client", allow_pending
     extras = {}
     if c and c.get("vertical") in ("doctor", "salon"):
         extras["appointments_today"] = await db.appointments.count_documents({"client_id": user["id"], "date": datetime.now(timezone.utc).date().isoformat()})
+    elif c and c.get("vertical") == "studio":
+        extras["shoots_today"] = await db.appointments.count_documents({"client_id": user["id"], "date": datetime.now(timezone.utc).date().isoformat()})
+        extras["shoots_total"] = await db.appointments.count_documents({"client_id": user["id"]})
+        extras["products"] = await db.products.count_documents({"client_id": user["id"]})
+        extras["orders_pending"] = await db.orders.count_documents({"client_id": user["id"], "status": "pending"})
+        extras["orders_total"] = await db.orders.count_documents({"client_id": user["id"]})
     elif c and c.get("vertical") == "retailer":
         extras["products"] = await db.products.count_documents({"client_id": user["id"]})
         extras["orders_pending"] = await db.orders.count_documents({"client_id": user["id"], "status": "pending"})
@@ -2965,6 +3029,13 @@ async def update_salon_profile(body: DoctorProfile, user: dict = Depends(require
     return await _update_service_profile("salon", body, user)
 
 
+@api.put("/client/studio/profile")
+async def update_studio_profile(body: DoctorProfile, user: dict = Depends(require_role("client")), branch_id: Optional[str] = None):
+    if branch_id:
+        return await _update_branch_service_profile("studio", body, user, branch_id)
+    return await _update_service_profile("studio", body, user)
+
+
 @api.get("/client/doctor/appointments")
 async def list_appointments(user: dict = Depends(require_role("client"))):
     return await _list_service_appointments(user, vertical="doctor")
@@ -2975,8 +3046,142 @@ async def list_salon_appointments(user: dict = Depends(require_role("client"))):
     return await _list_service_appointments(user, vertical="salon")
 
 
+@api.get("/client/studio/appointments")
+async def list_studio_appointments(user: dict = Depends(require_role("client"))):
+    return await _list_service_appointments(user, vertical="studio")
+
+
+@api.get("/client/studio/gallery")
+async def get_studio_gallery(user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    items = list(sp.get("gallery") or [])
+    cleaned = []
+    for g in items:
+        if isinstance(g, dict):
+            row = dict(g)
+            if row.get("image_url"):
+                row["image_url"] = _absolute_media_url(str(row.get("image_url") or ""))
+            cleaned.append(row)
+    return cleaned
+
+
+@api.post("/client/studio/gallery")
+async def add_studio_gallery_item(item: StudioGalleryItem, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    gallery = list(sp.get("gallery") or [])
+    new_item = {
+        "id": item.id or f"gal-{uuid.uuid4().hex[:8]}",
+        "title": item.title.strip() or "Studio Shoot",
+        "category": item.category.strip() or "Wedding",
+        "image_url": item.image_url.strip(),
+        "description": (item.description or "").strip(),
+        "featured": bool(item.featured),
+        "created_at": item.created_at or now_iso(),
+    }
+    gallery.insert(0, new_item)
+    await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.gallery": gallery}})
+    res_item = dict(new_item)
+    res_item["image_url"] = _absolute_media_url(res_item["image_url"])
+    return res_item
+
+
+@api.delete("/client/studio/gallery/{item_id}")
+async def delete_studio_gallery_item(item_id: str, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    gallery = [g for g in (sp.get("gallery") or []) if str(g.get("id")) != item_id]
+    await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.gallery": gallery}})
+    return {"ok": True, "remaining": len(gallery)}
+
+
+@api.put("/client/studio/gallery/{item_id}")
+async def update_studio_gallery_item(item_id: str, body: dict, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    gallery = list(sp.get("gallery") or [])
+    updated = False
+    for i, g in enumerate(gallery):
+        if str(g.get("id")) == item_id:
+            gallery[i] = {**g, **body, "id": item_id}
+            updated = True
+            break
+    if updated:
+        await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.gallery": gallery}})
+    return {"ok": True}
+
+
+@api.get("/client/studio/offers")
+async def get_studio_offers(user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    items = list(sp.get("offers") or [])
+    cleaned = []
+    for o in items:
+        if isinstance(o, dict):
+            row = dict(o)
+            if row.get("image_url"):
+                row["image_url"] = _absolute_media_url(str(row.get("image_url") or ""))
+            cleaned.append(row)
+    return cleaned
+
+
+@api.post("/client/studio/offers")
+async def add_studio_offer(item: StudioOfferItem, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    offers = list(sp.get("offers") or [])
+    new_offer = {
+        "id": item.id or f"off-{uuid.uuid4().hex[:8]}",
+        "title": item.title.strip() or "Special Studio Offer",
+        "badge": (item.badge or "FESTIVE COMBO").strip().upper(),
+        "original_price": float(item.original_price or 0),
+        "offer_price": float(item.offer_price or 0),
+        "coupon_code": (item.coupon_code or "").strip().upper(),
+        "valid_until": (item.valid_until or "").strip(),
+        "description": (item.description or "").strip(),
+        "deliverables": (item.deliverables or "").strip(),
+        "image_url": (item.image_url or "").strip(),
+        "active": bool(item.active),
+        "featured_banner": bool(item.featured_banner),
+        "created_at": item.created_at or now_iso(),
+    }
+    offers.insert(0, new_offer)
+    await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.offers": offers}})
+    res_item = dict(new_offer)
+    if res_item.get("image_url"):
+        res_item["image_url"] = _absolute_media_url(res_item["image_url"])
+    return res_item
+
+
+@api.delete("/client/studio/offers/{item_id}")
+async def delete_studio_offer(item_id: str, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    offers = [o for o in (sp.get("offers") or []) if str(o.get("id")) != item_id]
+    await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.offers": offers}})
+    return {"ok": True, "remaining": len(offers)}
+
+
+@api.put("/client/studio/offers/{item_id}")
+async def update_studio_offer(item_id: str, body: dict, user: dict = Depends(require_role("client"))):
+    c = await db.clients.find_one({"id": user["id"]}, {"_id": 0, "studio_profile": 1})
+    sp = (c or {}).get("studio_profile") or {}
+    offers = list(sp.get("offers") or [])
+    updated = False
+    for i, o in enumerate(offers):
+        if str(o.get("id")) == item_id:
+            offers[i] = {**o, **body, "id": item_id}
+            updated = True
+            break
+    if updated:
+        await db.clients.update_one({"id": user["id"]}, {"$set": {"studio_profile.offers": offers}})
+    return {"ok": True}
+
+
 @api.get("/client/{vertical}/appointments/board")
-async def get_service_appointment_board(vertical: Literal["doctor", "salon"], user: dict = Depends(require_role("client")), branch_id: Optional[str] = None):
+async def get_service_appointment_board(vertical: Literal["doctor", "salon", "studio"], user: dict = Depends(require_role("client")), branch_id: Optional[str] = None):
     c = await db.clients.find_one({"id": user["id"], "vertical": vertical}, {"_id": 0, "id": 1})
     if not c:
         raise HTTPException(status_code=403, detail=f"Not a {_service_label(vertical).lower()} account")
@@ -3386,8 +3591,8 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
         "weather": _resolve_weather_snapshot(c.get("address", "")),
     }
 
-    # Doctor / Salon: include profile and live queue
-    if vertical in ("doctor", "salon"):
+    # Doctor / Salon / Studio: include profile and live queue
+    if vertical in ("doctor", "salon", "studio"):
         profile_field = _service_profile_field(vertical)
         client_profile = c.get(profile_field, {}) or {}
         branch_profile = _branch_profile_for_vertical(branch_doc, profile_field)
@@ -3439,7 +3644,7 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
                 "wait_after_mins": queue_minutes,
             })
             queue_minutes += max(5, duration)
-        return {
+        res = {
             **base,
             "profile": profile,
             "queue_length": len(active),
@@ -3453,6 +3658,13 @@ async def _public_service_profile(cid: str, branch_id: Optional[str] = None):
             "booking_devices": booking_devices,
             "subscription": await _resolve_storage_plan_for_client(c) or None,
         }
+        if vertical == "studio":
+            products = await db.products.find({"client_id": cid, "is_published": {"$ne": False}}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+            categories = await db.product_categories.find({"client_id": cid}, {"_id": 0}).sort("sort_order", 1).to_list(200)
+            res["products"] = [hydrate_product(p) for p in products]
+            res["categories"] = categories
+            res["studio_profile"] = profile
+        return res
 
     # Retailer: include storefront profile and product catalog
     if vertical == "retailer":
@@ -3551,7 +3763,7 @@ async def _book_service(cid: str, body: AppointmentCreate, source: Optional[str]
     if len(phone_digits) < 10 or len(phone_digits) > 15:
         raise HTTPException(status_code=400, detail="Patient phone must be 10 to 15 digits")
 
-    c = await db.clients.find_one({"id": cid, "vertical": {"$in": ["doctor", "salon"]}}, {"_id": 0})
+    c = await db.clients.find_one({"id": cid, "vertical": {"$in": ["doctor", "salon", "studio"]}}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Service provider not found")
     client_vertical = _normalize_vertical(c.get("vertical"))
@@ -3789,7 +4001,7 @@ async def public_provider_my_enrollments(client_ref: str, request: Request):
 @public_api.get("/doctors/{cid}")
 async def public_doctor_profile(cid: str):
     client = await _resolve_public_client_ref(cid)
-    if client.get("vertical") not in ("doctor", "salon"):
+    if client.get("vertical") not in ("doctor", "salon", "studio"):
         raise HTTPException(status_code=404, detail="Provider not found")
     return await _public_service_profile(client["id"])
 
@@ -3797,7 +4009,7 @@ async def public_doctor_profile(cid: str):
 @public_api.get("/doctors/{cid}/branches/{bid}")
 async def public_doctor_branch_profile(cid: str, bid: str):
     client = await _resolve_public_client_ref(cid)
-    if client.get("vertical") not in ("doctor", "salon"):
+    if client.get("vertical") not in ("doctor", "salon", "studio"):
         raise HTTPException(status_code=404, detail="Provider not found")
     return await _public_service_profile(client["id"], branch_id=bid)
 
@@ -4157,7 +4369,7 @@ async def public_store_order_detail(client_ref: str, oid: str, request: Request)
 
 
 @api.post("/client/{vertical}/appointments")
-async def create_service_appointment(vertical: Literal["doctor", "salon"], body: AppointmentCreate, user: dict = Depends(require_role("client")), branch_id: Optional[str] = None):
+async def create_service_appointment(vertical: Literal["doctor", "salon", "studio"], body: AppointmentCreate, user: dict = Depends(require_role("client")), branch_id: Optional[str] = None):
     c = await db.clients.find_one({"id": user["id"], "vertical": vertical}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=403, detail=f"Not a {_service_label(vertical).lower()} account")
@@ -4493,6 +4705,7 @@ _VERTICAL_LABELS = {
     "salon": "Salon / Spa",
     "retailer": "Retailer",
     "society": "Society / Apartment",
+    "studio": "Photography Studio",
 }
 
 

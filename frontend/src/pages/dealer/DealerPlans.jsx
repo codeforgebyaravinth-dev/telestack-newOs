@@ -12,6 +12,7 @@ const VERTICALS = [
   { value: "salon", label: "Salon / Spa" },
   { value: "retailer", label: "Retailer" },
   { value: "society", label: "Society / Apartment" },
+  { value: "studio", label: "Photography Studio" },
 ];
 
 function verticalLabel(value) {
