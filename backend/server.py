@@ -6219,8 +6219,14 @@ origins.extend([
     "http://127.0.0.1:4000",
     "http://127.0.0.1",
 ])
-app.add_middleware(CORSMiddleware, allow_origins=origins or ["*"],
-                   allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_origin_regex=r"^https?://.*$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
