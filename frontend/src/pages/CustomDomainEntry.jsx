@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
+import { API_BASE } from "../lib/api";
 import PublicBooking from "./PublicBooking";
 import PublicStore from "./store/PublicStore";
 
@@ -8,16 +9,36 @@ export default function CustomDomainEntry() {
 
   useEffect(() => {
     const host = window.location.hostname;
+    const resolveUrl = `${API_BASE}/public/resolve-host`;
     axios
-      .get(`${window.location.origin}/api/public/resolve-host`, { params: { host } })
+      .get(resolveUrl, { params: { host } })
       .then(({ data }) => {
-        setState({
-          loading: false,
-          vertical: data.vertical || "general",
-          slug: data.public_booking_slug || data.client_id,
-        });
+        if (data && typeof data === "object" && data.client_id) {
+          setState({
+            loading: false,
+            vertical: data.vertical || "general",
+            slug: data.public_booking_slug || data.client_id,
+          });
+        } else {
+          setState({ loading: false, vertical: null, slug: null });
+        }
       })
-      .catch(() => setState({ loading: false, vertical: null, slug: null }));
+      .catch(() => {
+        axios
+          .get(`${window.location.origin}/api/public/resolve-host`, { params: { host } })
+          .then(({ data }) => {
+            if (data && typeof data === "object" && data.client_id) {
+              setState({
+                loading: false,
+                vertical: data.vertical || "general",
+                slug: data.public_booking_slug || data.client_id,
+              });
+            } else {
+              setState({ loading: false, vertical: null, slug: null });
+            }
+          })
+          .catch(() => setState({ loading: false, vertical: null, slug: null }));
+      });
   }, []);
 
   if (state.loading) {
