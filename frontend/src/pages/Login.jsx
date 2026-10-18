@@ -57,7 +57,7 @@ export default function Login() {
             B2B / Control Panel · v1.0
           </div>
           <h1 className="font-display text-5xl xl:text-6xl font-extrabold tracking-tighter leading-[0.95]">
-            One pane <br/> of glass for <br/> every screen.
+            One pane <br /> of glass for <br /> every screen.
           </h1>
           <p className="text-white/70 mt-6 text-sm max-w-md">
             Manage dealers, clients, signage templates and wallets across Cloud, USB and Hybrid plans.
@@ -124,7 +124,7 @@ export default function Login() {
           </Button>
 
           <div className="mt-6 pt-6 border-t border-[#E5E7EB]">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-3">Demo accounts</div>
+            {/*<div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#6B7280] mb-3">Demo accounts</div>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => seed("admin")} data-testid="seed-admin"
                 className="flex items-center gap-2 px-3 py-2 border border-[#E5E7EB] rounded-sm text-xs hover:bg-[#F3F4F6] transition-colors">
@@ -134,7 +134,7 @@ export default function Login() {
                 className="flex items-center gap-2 px-3 py-2 border border-[#E5E7EB] rounded-sm text-xs hover:bg-[#F3F4F6] transition-colors">
                 <FileVideo className="w-3.5 h-3.5" /> Dealer
               </button>
-            </div>
+            </div>*/}
           </div>
         </form>
       </div>
