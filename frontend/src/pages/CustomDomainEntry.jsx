@@ -18,9 +18,10 @@ export default function CustomDomainEntry() {
             loading: false,
             vertical: data.vertical || "general",
             slug: data.public_booking_slug || data.client_id,
+            clientId: data.client_id,
           });
         } else {
-          setState({ loading: false, vertical: null, slug: null });
+          setState({ loading: false, vertical: null, slug: null, clientId: null });
         }
       })
       .catch(() => {
@@ -32,12 +33,13 @@ export default function CustomDomainEntry() {
                 loading: false,
                 vertical: data.vertical || "general",
                 slug: data.public_booking_slug || data.client_id,
+                clientId: data.client_id,
               });
             } else {
-              setState({ loading: false, vertical: null, slug: null });
+              setState({ loading: false, vertical: null, slug: null, clientId: null });
             }
           })
-          .catch(() => setState({ loading: false, vertical: null, slug: null }));
+          .catch(() => setState({ loading: false, vertical: null, slug: null, clientId: null }));
       });
   }, []);
 
@@ -53,5 +55,5 @@ export default function CustomDomainEntry() {
     return <PublicStore resolvedHost={window.location.hostname} clientRef={state.slug} />;
   }
 
-  return <PublicBooking resolvedHost={window.location.hostname} />;
+  return <PublicBooking resolvedHost={window.location.hostname} initialClientId={state.clientId} />;
 }

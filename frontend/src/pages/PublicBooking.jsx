@@ -74,15 +74,15 @@ function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
-export default function PublicBooking({ resolvedHost = null }) {
-  return <PublicBookingInner resolvedHost={resolvedHost} />;
+export default function PublicBooking({ resolvedHost = null, initialClientId = null }) {
+  return <PublicBookingInner resolvedHost={resolvedHost} initialClientId={initialClientId} />;
 }
 
-function PublicBookingInner({ resolvedHost = null }) {
+function PublicBookingInner({ resolvedHost = null, initialClientId = null }) {
   const { clientId: routeClientId } = useParams();
-  const [resolvedClientId, setResolvedClientId] = useState(routeClientId || "");
+  const [resolvedClientId, setResolvedClientId] = useState(routeClientId || initialClientId || "");
   const branchId = useMemo(() => new URLSearchParams(window.location.search).get("branch_id") || "", []);
-  const apiBase = useMemo(() => publicApiBase(resolvedHost), [resolvedHost]);
+  const apiBase = useMemo(() => publicApiBase(), []);
   const clientId = routeClientId || resolvedClientId;
   const authRef = routeClientId || clientId;
   const customerApi = useMemo(() => (authRef && authRef !== false ? createPublicCustomerApi(authRef, resolvedHost, "providers") : null), [authRef, resolvedHost]);
@@ -103,6 +103,10 @@ function PublicBookingInner({ resolvedHost = null }) {
       setResolvedClientId(routeClientId);
       return;
     }
+    if (initialClientId) {
+      setResolvedClientId(initialClientId);
+      return;
+    }
     const host = resolvedHost || window.location.hostname;
     if (!isCustomBookingHost(host)) {
       setResolvedClientId(false);
@@ -110,11 +114,11 @@ function PublicBookingInner({ resolvedHost = null }) {
     }
     let mounted = true;
     setLoading(true);
-    axios.get(`${publicApiBase(host)}/resolve-host`, { params: { host } })
+    axios.get(`${publicApiBase()}/resolve-host`, { params: { host } })
       .then(({ data }) => { if (mounted) setResolvedClientId(data?.client_id || false); })
       .catch(() => { if (mounted) setResolvedClientId(false); });
     return () => { mounted = false; };
-  }, [routeClientId, resolvedHost]);
+  }, [routeClientId, resolvedHost, initialClientId]);
 
   useEffect(() => {
     if (!clientId || clientId === false) {

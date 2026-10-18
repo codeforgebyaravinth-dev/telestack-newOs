@@ -1,4 +1,5 @@
 import axios from "axios";
+import { API_BASE } from "./api";
 
 const PLATFORM_HOSTS = new Set([
   "rpsignage.com",
@@ -27,11 +28,8 @@ export function isCustomStoreHost(hostname) {
   return true;
 }
 
-export function publicStoreBase(resolvedHost) {
-  if (resolvedHost || isCustomStoreHost(typeof window !== "undefined" ? window.location.hostname : "")) {
-    return `${window.location.origin}/api/public`;
-  }
-  return `${(process.env.REACT_APP_BACKEND_URL || "https://rpsignage.com").replace(/\/$/, "")}/api/public`;
+export function publicStoreBase() {
+  return `${API_BASE}/public`;
 }
 
 export function createStoreApi(clientRef, resolvedHost) {
