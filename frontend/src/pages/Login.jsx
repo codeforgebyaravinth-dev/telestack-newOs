@@ -11,8 +11,8 @@ import { toast } from "sonner";
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("admin@demo.com");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("example.com");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -35,8 +35,8 @@ export default function Login() {
   };
 
   const seed = (role) => {
-    if (role === "admin") { setEmail("admin@demo.com"); setPassword("admin123"); }
-    else { setEmail("dealer@demo.com"); setPassword("dealer123"); }
+    // if (role === "admin") { setEmail("admin@demo.com"); setPassword("admin123"); }
+    // else { setEmail("dealer@demo.com"); setPassword("dealer123"); }
   };
 
   return (
