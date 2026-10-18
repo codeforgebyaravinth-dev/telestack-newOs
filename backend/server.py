@@ -3189,13 +3189,20 @@ async def get_service_appointment_board(vertical: Literal["doctor", "salon", "st
 
 
 @api.post("/client/doctor/appointments/{aid}/status")
-async def set_apt_status(aid: str, status: Literal["pending", "called", "done", "cancelled"], user: dict = Depends(require_role("client"))):
-    return await _set_service_appointment_status(aid, status, user)
-
-
 @api.post("/client/salon/appointments/{aid}/status")
-async def set_salon_apt_status(aid: str, status: Literal["pending", "called", "done", "cancelled"], user: dict = Depends(require_role("client"))):
-    return await _set_service_appointment_status(aid, status, user)
+@api.post("/client/studio/appointments/{aid}/status")
+async def set_service_appointment_status_endpoint(
+    aid: str,
+    status: Optional[str] = Query(None),
+    body: Optional[Dict[str, Any]] = Body(None),
+    user: dict = Depends(require_role("client"))
+):
+    req_status = (status or (body.get("status") if isinstance(body, dict) else None) or "").strip()
+    if req_status == "completed":
+        req_status = "done"
+    if req_status not in ("pending", "called", "done", "cancelled"):
+        raise HTTPException(status_code=400, detail="Invalid status. Expected pending, called, done, or cancelled")
+    return await _set_service_appointment_status(aid, req_status, user)
 
 # ----------- Retailer vertical -----------
 @api.put("/client/retailer/profile")

@@ -500,8 +500,8 @@ export default function StudioStorefrontPanel() {
   // Update Shoot Booking status
   const handleBookingStatus = async (aid, status) => {
     try {
-      await api.post(`/client/doctor/appointments/${aid}/status`, { status });
-      toast.success(`Booking status changed to ${status}`);
+      await api.post(`/client/studio/appointments/${aid}/status?status=${status}`, { status });
+      toast.success(`Booking status changed to ${status === "done" ? "completed" : status}`);
       loadBookings();
     } catch (err) {
       toast.error(formatErr(err.response?.data?.detail));

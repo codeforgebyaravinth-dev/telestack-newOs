@@ -65,7 +65,20 @@ const PLATFORM_HOSTS = new Set(["rpsignage.com", "rpsignage.in", "localhost", "1
 function isCustomBookingHost() {
   if (typeof window === "undefined") return false;
   const host = window.location.hostname.toLowerCase();
-  return host && !PLATFORM_HOSTS.has(host);
+  if (!host) return false;
+  if (PLATFORM_HOSTS.has(host)) return false;
+  // Cloud deployment platform domains are platform hosts, NOT client custom booking domains
+  if (
+    host.endsWith(".onrender.com") ||
+    host.endsWith(".render.com") ||
+    host.includes("render.com") ||
+    host.endsWith(".vercel.app") ||
+    host.endsWith(".netlify.app") ||
+    host.endsWith(".pages.dev")
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function RootRoute() {
@@ -106,16 +119,27 @@ export default function App() {
   }
 
   if (isCustomBookingHost()) {
-    return (
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/*" element={<CustomDomainEntry />} />
-          </Routes>
-          <Toaster position="top-right" />
-        </BrowserRouter>
-      </AuthProvider>
-    );
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
+    const isPlatformPath =
+      path.startsWith("/login") ||
+      path.startsWith("/admin") ||
+      path.startsWith("/dealer") ||
+      path.startsWith("/client") ||
+      path.startsWith("/play") ||
+      path.startsWith("/book") ||
+      path.startsWith("/store");
+    if (!isPlatformPath) {
+      return (
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/*" element={<CustomDomainEntry />} />
+            </Routes>
+            <Toaster position="top-right" />
+          </BrowserRouter>
+        </AuthProvider>
+      );
+    }
   }
 
   return (
